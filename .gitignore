@@ -1,0 +1,22 @@
+# LLVM IR and object files
+*.ll
+*.o
+*.s
+
+# Executables
+program
+test
+*.bin
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
