@@ -2,9 +2,11 @@ from llvmlite import ir
 import llvmlite.binding as llvm
 import sys
 
+
 def error(line_num, msg):
     print(f"compilation error: line {line_num}: {msg}", file=sys.stderr)
     sys.exit(1)
+
 
 def resolve_operand(token, line_num):
     token = token.strip()
@@ -18,6 +20,7 @@ def resolve_operand(token, line_num):
 
 if len(sys.argv) == 3 and sys.argv[1] == "--lex":
     from lexer import lex, print_tokens, CompileError
+
     try:
         with open(sys.argv[2], "rb") as f:
             tokens = lex(f.read())
@@ -28,7 +31,10 @@ if len(sys.argv) == 3 and sys.argv[1] == "--lex":
         sys.exit(1)
 
 if len(sys.argv) != 3:
-    print("Usage: python3 compiler.py <input_file.txt> <output_file.ll> OR python3 compiler.py --lex <input_file.txt>", file=sys.stderr)
+    print(
+        "Usage: python3 compiler.py <input_file.txt> <output_file.ll> OR python3 compiler.py --lex <input_file.txt>",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 input_file = sys.argv[1]
@@ -41,8 +47,9 @@ module.triple = llvm.get_default_triple()
 main = ir.Function(module, ir.FunctionType(I32, []), name="main")
 builder = ir.IRBuilder(main.append_basic_block("entry"))
 
-printf = ir.Function(module, ir.FunctionType(I32, [ir.PointerType(I8)], var_arg=True),
- name="printf") # declaration only
+printf = ir.Function(
+    module, ir.FunctionType(I32, [ir.PointerType(I8)], var_arg=True), name="printf"
+)  # declaration only
 
 text = b"Program exit with result %d\n\0"
 fmt = ir.GlobalVariable(module, ir.ArrayType(I8, len(text)), name="fmt")
@@ -52,7 +59,7 @@ fmt.initializer = ir.Constant(ir.ArrayType(I8, len(text)), bytearray(text))
 symbols = {}
 
 try:
-    with open(input_file, 'r') as f:
+    with open(input_file, "r") as f:
         lines = f.readlines()
 except FileNotFoundError:
     error(1, f"file {input_file} not found")
@@ -69,7 +76,7 @@ for line_num, line in enumerate(lines, 1):
         error(line_num, "code after exit")
 
     if line.startswith("int "):
-        parts = line.split(' ')
+        parts = line.split(" ")
         name = parts[1] if len(parts) == 2 else error(line_num, "missing variable")
 
         if not name.isidentifier() or name in ["int", "exit"]:
@@ -83,11 +90,11 @@ for line_num, line in enumerate(lines, 1):
         parts = line.split(":=")
         if len(parts) != 2:
             error(line_num, f"malformed assignment: {line}")
-        
+
         lhs = parts[0].strip()
         if lhs not in symbols:
             error(line_num, f"undeclared variable: {lhs}")
-        
+
         rhs = parts[1].strip()
 
         # Шукаємо оператор серед +, -, *
@@ -101,16 +108,16 @@ for line_num, line in enumerate(lines, 1):
             op_parts = rhs.split(op)
             if len(op_parts) != 2:
                 error(line_num, f"malformed expression: {rhs}")
-            
+
             left_operand = resolve_operand(op_parts[0], line_num)
             right_operand = resolve_operand(op_parts[1], line_num)
-            
+
             match op:
-                case '+':
+                case "+":
                     res = builder.add(left_operand, right_operand)
-                case '-':
+                case "-":
                     res = builder.sub(left_operand, right_operand)
-                case '*':
+                case "*":
                     res = builder.mul(left_operand, right_operand)
             builder.store(res, symbols[lhs])
         else:
@@ -129,7 +136,7 @@ for line_num, line in enumerate(lines, 1):
 
     else:
         error(line_num, f"syntax error in line '{line}'")
-        
+
 if not has_exit:
     error(len(lines), "missing exit statement")
 

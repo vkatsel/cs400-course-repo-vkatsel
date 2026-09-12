@@ -14,9 +14,14 @@ __pycache__/
 *$py.class
 .venv/
 venv/
+.ruff*
 
 # Editor / OS
 .vscode/
 .idea/
 .DS_Store
+
+# Agents
+.agents/
+.agent/
 
