@@ -51,6 +51,14 @@ llc -filetype=obj -relocation-model=pic output.ll -o output.o
 clang -fPIE output.o -o program && ./program
 ```
 
+### One-step Compile and Run
+
+You can compile and run any program in one step using `run.sh`:
+
+```bash
+./run.sh input.txt
+```
+
 ## Running Tests
 
 To run the automated test suite:

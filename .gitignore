@@ -21,7 +21,8 @@ venv/
 .idea/
 .DS_Store
 
-# Agents
+# Agents & Submission Logs
 .agents/
 .agent/
+ai_usage.txt
 

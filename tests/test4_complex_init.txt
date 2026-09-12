@@ -1,0 +1,5 @@
+i32 base{6}
+i32 multiplier{7}
+i32 mut total{base*multiplier}
+total := total + 8
+exit total
