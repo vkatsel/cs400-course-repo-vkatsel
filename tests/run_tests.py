@@ -5,8 +5,44 @@ import shutil
 import tempfile
 from pathlib import Path
 
+def run_ir(out_ll: Path) -> str | None:
+    if shutil.which("lli") is not None:
+        res = subprocess.run(["lli", str(out_ll)], capture_output=True, text=True)
+        return res.stdout.strip()
 
-def main():
+    if shutil.which("llc") is not None and shutil.which("clang") is not None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_o = Path(tmpdir) / "out.o"
+            out_bin = Path(tmpdir) / "out.bin"
+            subprocess.run(["llc", "-filetype=obj", "-relocation-model=pic", str(out_ll), "-o", str(out_o)], check=True)
+            subprocess.run(["clang", "-fPIE", str(out_o), "-o", str(out_bin)], check=True)
+            bin_res = subprocess.run([str(out_bin)], capture_output=True, text=True)
+            return bin_res.stdout.strip()
+
+    jit_script = f"""
+import llvmlite.binding as llvm
+import ctypes
+
+llvm.initialize_native_target()
+llvm.initialize_native_asmprinter()
+
+with open(r'{out_ll}', 'r', encoding='utf-8') as f:
+    ll_text = f.read()
+
+llvm_mod = llvm.parse_assembly(ll_text)
+target_machine = llvm.Target.from_default_triple().create_target_machine()
+engine = llvm.create_mcjit_compiler(llvm_mod, target_machine)
+engine.finalize_object()
+func_ptr = engine.get_function_address('main')
+cfunc = ctypes.CFUNCTYPE(ctypes.c_int32)(func_ptr)
+cfunc()
+"""
+    res = subprocess.run([sys.executable, "-c", jit_script], capture_output=True, text=True)
+    if res.returncode == 0:
+        return res.stdout.strip()
+    return None
+
+def main() -> None:
     repo_root = Path(__file__).resolve().parent.parent
     compiler_py = repo_root / "compiler.py"
     tests_dir = repo_root / "tests"
@@ -15,12 +51,7 @@ def main():
         print(f"Error: compiler.py not found at {compiler_py}", file=sys.stderr)
         sys.exit(1)
 
-    has_lli = shutil.which("lli") is not None
-    has_llc = shutil.which("llc") is not None and shutil.which("clang") is not None
-
-    test_files = sorted(
-        list(tests_dir.glob("test*.txt")) + list(tests_dir.glob("fail*.txt"))
-    )
+    test_files = sorted(list(tests_dir.glob("test*.txt")) + list(tests_dir.glob("fail*.txt")))
     if not test_files:
         print("No test files found.")
         sys.exit(1)
@@ -37,11 +68,8 @@ def main():
             out_ll = Path(tmpdir) / f"{test_name}.ll"
             expected_file = tests_dir / f"{test_name}.expected"
 
-            expected_text = (
-                expected_file.read_text().strip() if expected_file.exists() else None
-            )
+            expected_text = expected_file.read_text(encoding="utf-8").strip() if expected_file.exists() else None
 
-            # Run compiler
             res = subprocess.run(
                 [sys.executable, str(compiler_py), str(test_file), str(out_ll)],
                 capture_output=True,
@@ -50,25 +78,21 @@ def main():
 
             if is_fail_test:
                 if res.returncode == 0:
-                    print(
-                        f"❌ FAIL: {test_name} (expected compilation failure, but exited with 0)"
-                    )
+                    print(f"❌ FAIL: {test_name} (expected failure, but exited with 0)")
                     failed += 1
                     continue
                 stderr_out = res.stderr.strip()
                 if expected_text and expected_text not in stderr_out:
                     print(f"❌ FAIL: {test_name}")
-                    print(f"   Expected stderr to contain: {expected_text}")
-                    print(f"   Actual stderr: {stderr_out}")
+                    print(f"   Expected stderr: {expected_text}")
+                    print(f"   Actual stderr:   {stderr_out}")
                     failed += 1
                     continue
-                print(f"✅ PASS: {test_name} (failed as expected: {stderr_out})")
+                print(f"✅ PASS: {test_name} -> {stderr_out}")
                 passed += 1
             else:
                 if res.returncode != 0:
-                    print(
-                        f"❌ FAIL: {test_name} (compilation failed with code {res.returncode})"
-                    )
+                    print(f"❌ FAIL: {test_name} (compilation error)")
                     print(f"   stderr: {res.stderr.strip()}")
                     failed += 1
                     continue
@@ -78,55 +102,22 @@ def main():
                     failed += 1
                     continue
 
-                # Run executable if runtime is available
-                run_output = None
-                if has_lli:
-                    lli_res = subprocess.run(
-                        ["lli", str(out_ll)], capture_output=True, text=True
-                    )
-                    run_output = lli_res.stdout.strip()
-                elif has_llc:
-                    out_o = Path(tmpdir) / f"{test_name}.o"
-                    out_bin = Path(tmpdir) / f"{test_name}.bin"
-                    subprocess.run(
-                        [
-                            "llc",
-                            "-filetype=obj",
-                            "-relocation-model=pic",
-                            str(out_ll),
-                            "-o",
-                            str(out_o),
-                        ],
-                        check=True,
-                    )
-                    subprocess.run(
-                        ["clang", "-fPIE", str(out_o), "-o", str(out_bin)], check=True
-                    )
-                    bin_res = subprocess.run(
-                        [str(out_bin)], capture_output=True, text=True
-                    )
-                    run_output = bin_res.stdout.strip()
-
-                if run_output is not None and expected_text:
-                    if run_output != expected_text:
+                actual_output = run_ir(out_ll)
+                if actual_output is not None and expected_text:
+                    if actual_output != expected_text:
                         print(f"❌ FAIL: {test_name}")
                         print(f"   Expected output: {expected_text}")
-                        print(f"   Actual output:   {run_output}")
+                        print(f"   Actual output:   {actual_output}")
                         failed += 1
                         continue
 
-                status_extra = (
-                    f" (output: {run_output})"
-                    if run_output is not None
-                    else " (IR generated)"
-                )
-                print(f"✅ PASS: {test_name}{status_extra}")
+                output_info = f" (output: '{actual_output}')" if actual_output is not None else " (IR generated)"
+                print(f"✅ PASS: {test_name}{output_info}")
                 passed += 1
 
     print(f"\nResult: {passed} passed, {failed} failed.")
     if failed > 0:
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

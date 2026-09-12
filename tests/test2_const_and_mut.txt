@@ -1,0 +1,5 @@
+i32 a{10}
+i32 b{5}
+i32 mut c{a + b}
+c := c - 3
+exit c

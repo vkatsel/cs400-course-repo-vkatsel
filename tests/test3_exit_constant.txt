@@ -1,0 +1,2 @@
+i32 dummy{0}
+exit 42
