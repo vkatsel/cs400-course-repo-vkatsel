@@ -131,3 +131,33 @@ Model:
 Будь ласка, перегляньте план і підтвердіть, якщо все влаштовує, або напишіть ваші побажання перед початком написання коду.
 
 ---
+
+User:
+[Approved] task1_lexer_plan.md
+
+Model:
+**Task 1 повністю виконано та протестовано!**
+
+### Що зроблено:
+1. **Створено [`lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py)**:
+   - Реалізовано побайтовий скінченний автомат над `bytes` (стани `START`, `IDENT`, `NUMBER`, `COLON`).
+   - Жодних регулярних виразів чи `split()`, зчитування по одному байту з можливістю повторного аналізу завершального байта.
+   - Токени зберігають точні координати `line` та `col` (1-based) для першого байта.
+   - Підтримуються всі категорії: `keyword` (`i32`, `mut`, `exit`), `identifier`, `constant` (`numeric`), `block` (`{`, `}`), `operator` (`:=`, `+`, `-`, `*`), `endline` (`\n`).
+   - Реалізовано повідомлення про помилки з координатами `line:col`: невідомий байт, незакрита дужка `{` до кінця рядка, буква всередині числа, одиночний `:`, не-ASCII байти (> 127).
+
+2. **Інтеграція прапорця `--lex` у [`compiler.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py)**:
+   - Дозволяє запустити `python3 compiler.py --lex input.txt` для виводу послідовності токенів (зручно для демонстрації викладачу).
+
+3. **Створено тести**:
+   - [`tests/test_lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/test_lexer.py) — 10 юніт-тестів, які перевіряють worked example, токенізацію та всі види помилок (усі 10 проходять успішно).
+   - [`tests/worked_example.txt`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/worked_example.txt) — тестовий вхідний файл для прикладу з завдання.
+
+4. **Збережено стан у Git**:
+   - Закомічено в гілку `practice-2` (коміт `28a1ca4: feat(lexer): implement hand-written state machine lexer for Task 1`).
+
+Детальний звіт доступний у створенному артефакті 👉 [**walkthrough.md**](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/aeb32e3f-eaeb-4f51-a05d-208641d44136/walkthrough.md).
+
+Чи переходимо до **Task 2 (синтаксис, семантика mut/immut, парсер та генерація IR)**?
+
+---

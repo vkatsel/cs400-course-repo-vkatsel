@@ -5,6 +5,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+
 def main():
     repo_root = Path(__file__).resolve().parent.parent
     compiler_py = repo_root / "compiler.py"
@@ -17,7 +18,9 @@ def main():
     has_lli = shutil.which("lli") is not None
     has_llc = shutil.which("llc") is not None and shutil.which("clang") is not None
 
-    test_files = sorted(list(tests_dir.glob("test*.txt")) + list(tests_dir.glob("fail*.txt")))
+    test_files = sorted(
+        list(tests_dir.glob("test*.txt")) + list(tests_dir.glob("fail*.txt"))
+    )
     if not test_files:
         print("No test files found.")
         sys.exit(1)
@@ -34,18 +37,22 @@ def main():
             out_ll = Path(tmpdir) / f"{test_name}.ll"
             expected_file = tests_dir / f"{test_name}.expected"
 
-            expected_text = expected_file.read_text().strip() if expected_file.exists() else None
+            expected_text = (
+                expected_file.read_text().strip() if expected_file.exists() else None
+            )
 
             # Run compiler
             res = subprocess.run(
                 [sys.executable, str(compiler_py), str(test_file), str(out_ll)],
                 capture_output=True,
-                text=True
+                text=True,
             )
 
             if is_fail_test:
                 if res.returncode == 0:
-                    print(f"❌ FAIL: {test_name} (expected compilation failure, but exited with 0)")
+                    print(
+                        f"❌ FAIL: {test_name} (expected compilation failure, but exited with 0)"
+                    )
                     failed += 1
                     continue
                 stderr_out = res.stderr.strip()
@@ -59,7 +66,9 @@ def main():
                 passed += 1
             else:
                 if res.returncode != 0:
-                    print(f"❌ FAIL: {test_name} (compilation failed with code {res.returncode})")
+                    print(
+                        f"❌ FAIL: {test_name} (compilation failed with code {res.returncode})"
+                    )
                     print(f"   stderr: {res.stderr.strip()}")
                     failed += 1
                     continue
@@ -72,14 +81,30 @@ def main():
                 # Run executable if runtime is available
                 run_output = None
                 if has_lli:
-                    lli_res = subprocess.run(["lli", str(out_ll)], capture_output=True, text=True)
+                    lli_res = subprocess.run(
+                        ["lli", str(out_ll)], capture_output=True, text=True
+                    )
                     run_output = lli_res.stdout.strip()
                 elif has_llc:
                     out_o = Path(tmpdir) / f"{test_name}.o"
                     out_bin = Path(tmpdir) / f"{test_name}.bin"
-                    subprocess.run(["llc", "-filetype=obj", "-relocation-model=pic", str(out_ll), "-o", str(out_o)], check=True)
-                    subprocess.run(["clang", "-fPIE", str(out_o), "-o", str(out_bin)], check=True)
-                    bin_res = subprocess.run([str(out_bin)], capture_output=True, text=True)
+                    subprocess.run(
+                        [
+                            "llc",
+                            "-filetype=obj",
+                            "-relocation-model=pic",
+                            str(out_ll),
+                            "-o",
+                            str(out_o),
+                        ],
+                        check=True,
+                    )
+                    subprocess.run(
+                        ["clang", "-fPIE", str(out_o), "-o", str(out_bin)], check=True
+                    )
+                    bin_res = subprocess.run(
+                        [str(out_bin)], capture_output=True, text=True
+                    )
                     run_output = bin_res.stdout.strip()
 
                 if run_output is not None and expected_text:
@@ -90,13 +115,18 @@ def main():
                         failed += 1
                         continue
 
-                status_extra = f" (output: {run_output})" if run_output is not None else " (IR generated)"
+                status_extra = (
+                    f" (output: {run_output})"
+                    if run_output is not None
+                    else " (IR generated)"
+                )
                 print(f"✅ PASS: {test_name}{status_extra}")
                 passed += 1
 
     print(f"\nResult: {passed} passed, {failed} failed.")
     if failed > 0:
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
