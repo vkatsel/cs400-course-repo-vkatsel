@@ -1,3 +1,0 @@
-int res
-res := 100 - 42
-exit res
