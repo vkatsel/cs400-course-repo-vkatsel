@@ -17,7 +17,7 @@ def main():
     has_lli = shutil.which("lli") is not None
     has_llc = shutil.which("llc") is not None and shutil.which("clang") is not None
 
-    test_files = sorted(tests_dir.glob("*.txt"))
+    test_files = sorted(list(tests_dir.glob("test*.txt")) + list(tests_dir.glob("fail*.txt")))
     if not test_files:
         print("No test files found.")
         sys.exit(1)
