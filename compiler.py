@@ -16,8 +16,19 @@ def resolve_operand(token, line_num):
         error(line_num, f"undeclared variable: {token}")
 
 
+if len(sys.argv) == 3 and sys.argv[1] == "--lex":
+    from lexer import lex, print_tokens, CompileError
+    try:
+        with open(sys.argv[2], "rb") as f:
+            tokens = lex(f.read())
+        print_tokens(tokens)
+        sys.exit(0)
+    except CompileError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
 if len(sys.argv) != 3:
-    print("Usage: python3 compiler.py <input_file.txt> <output_file.ll>", file=sys.stderr)
+    print("Usage: python3 compiler.py <input_file.txt> <output_file.ll> OR python3 compiler.py --lex <input_file.txt>", file=sys.stderr)
     sys.exit(1)
 
 input_file = sys.argv[1]
