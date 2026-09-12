@@ -161,3 +161,44 @@ Model:
 Чи переходимо до **Task 2 (синтаксис, семантика mut/immut, парсер та генерація IR)**?
 
 ---
+
+User:
+додай будь ласка собі в агенти використовувати стиль синтаксису пайтона 3.12+ та заміни огріхи в поточній версії лексеру
+
+Model:
+Виконано! Ось деталі внесених змін:
+
+### 1. Правила для агентів ([`AGENTS.md`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/AGENTS.md))
+Створено та збережено правила в [`.agents/AGENTS.md`](file:///home/ubuntu/cs400/.agents/AGENTS.md) та в репозиторії [`cs400-course-repo-vkatsel/AGENTS.md`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/AGENTS.md):
+- **Сучасна типізація**: використання вбудованих `list[...]`, `dict[...]`, `tuple[...]`, об'єднань `X | None` замість імпортів із `typing` (`List`, `Optional`, `Tuple`).
+- **Патерн-матчинг**: використання `match ... case ...` для автоматів та аналізу синтаксису.
+- **Датакласи та енуми**: використання `@dataclass(slots=True, frozen=True)` та `enum.StrEnum`.
+
+---
+
+### 2. Виправлення та модернізація [`lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py)
+- **`match ... case ...`**: логіку переходів автомата між станами та класифікацію байтів переписано на структурний патерн-матчинг замість довгих ланцюжків `if/elif`.
+- **`StrEnum` для станів**: замість звичайних рядків введено `class State(StrEnum): START, IDENT, NUMBER, COLON`.
+- **Оптимізований `Token`**:
+  - Переведено на `@dataclass(slots=True, frozen=True)` (швидший, незмінний, економний по пам'яті).
+  - Додано зручні властивості-хелпери для наступних фаз (Task 2 та парсера): `is_keyword`, `is_identifier`, `is_number`, `is_operator`, `is_block`, `is_endline`.
+- **Виправлення огріхів**:
+  - **Коректна обробка CRLF (`\r\n`)**: додано підтримку Windows-закінчень рядків без збою підрахунку колонок `col`.
+  - **Фіксація `start_line`**: токени тепер надійно зберігають `start_line` разом із `start_col` при переході між станами.
+  - **Типізація 3.12+**: видалено застарілі імпорти з `typing`, всюди використовуються вбудовані типи (`list[list[Token]]`, `int | None`, тощо).
+
+---
+
+### 3. Результати тестів та Git
+- Усі **12 юніт-тестів** у [`tests/test_lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/test_lexer.py) та **6 регресійних тестів** компілятора успішно пройдено:
+  ```text
+  Ran 12 tests in 0.001s: OK
+  Regression tests: 6 passed, 0 failed.
+  ```
+- Зміни закомічено в гілку `practice-2`:
+  ```text
+  * 70560ca - (HEAD -> practice-2) refactor(lexer): modernize to Python 3.12+ style and add workspace rules
+  * 28a1ca4 - feat(lexer): implement hand-written state machine lexer for Task 1
+  ```
+
+---
