@@ -14,9 +14,15 @@ __pycache__/
 *$py.class
 .venv/
 venv/
+.ruff*
 
 # Editor / OS
 .vscode/
 .idea/
 .DS_Store
+
+# Agents & Submission Logs
+.agents/
+.agent/
+ai_usage.txt
 
