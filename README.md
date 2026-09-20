@@ -8,6 +8,9 @@ Compiler implementation for Languages and Compilers Design (CS400).
 .
 ├── compiler.py        # Main compiler entry point (parser, AST, code generation)
 ├── grammar.ebnf       # Formal EBNF grammar definition
+├── examples/          # Example source programs and token dumps
+│   ├── worked_example.txt
+│   └── worked_example.tokens
 ├── tests/             # Test cases and expected outputs
 │   ├── run_tests.py   # Automated test runner
 │   ├── *.txt          # Source test programs
