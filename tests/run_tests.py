@@ -5,6 +5,17 @@ import shutil
 import tempfile
 from pathlib import Path
 
+def get_python_exe() -> str:
+    try:
+        import llvmlite  # noqa: F401
+        return sys.executable
+    except ImportError:
+        for candidate in ("/home/ubuntu/lcd/bin/python", str(Path.home() / "lcd/bin/python")):
+            if Path(candidate).exists():
+                return candidate
+        return sys.executable
+
+
 def run_ir(out_ll: Path) -> str | None:
     if shutil.which("lli") is not None:
         res = subprocess.run(["lli", str(out_ll)], capture_output=True, text=True)
@@ -37,7 +48,8 @@ func_ptr = engine.get_function_address('main')
 cfunc = ctypes.CFUNCTYPE(ctypes.c_int32)(func_ptr)
 cfunc()
 """
-    res = subprocess.run([sys.executable, "-c", jit_script], capture_output=True, text=True)
+    py_exe = get_python_exe()
+    res = subprocess.run([py_exe, "-c", jit_script], capture_output=True, text=True)
     if res.returncode == 0:
         return res.stdout.strip()
     return None
@@ -61,6 +73,41 @@ def main() -> None:
 
     print(f"Running {len(test_files)} tests...\n")
 
+    py_exe = get_python_exe()
+
+    # Step 0: Test --ast flag
+    ast_res = subprocess.run(
+        [py_exe, str(compiler_py), "--ast", str(tests_dir / "test1_valid_spec.txt")],
+        capture_output=True,
+        text=True,
+    )
+    expected_ast = """Program
+  Decl x const
+    Const 0
+  Decl y mut
+    Const 10
+  Decl z const
+    BinOp +
+      Const 2
+      Const 5
+  Decl t mut
+    BinOp +
+      Var x
+      Const 10
+  Assign t
+    BinOp *
+      Var t
+      Var z
+  Exit
+    Var t"""
+    if ast_res.returncode == 0 and ast_res.stdout.strip() == expected_ast.strip():
+        print("✅ PASS: compiler --ast on test1_valid_spec\n")
+    else:
+        print("❌ FAIL: compiler --ast on test1_valid_spec")
+        print(f"   stdout: {ast_res.stdout.strip()}")
+        print(f"   stderr: {ast_res.stderr.strip()}")
+        failed += 1
+
     with tempfile.TemporaryDirectory() as tmpdir:
         for test_file in test_files:
             test_name = test_file.stem
@@ -71,7 +118,7 @@ def main() -> None:
             expected_text = expected_file.read_text(encoding="utf-8").strip() if expected_file.exists() else None
 
             res = subprocess.run(
-                [sys.executable, str(compiler_py), str(test_file), str(out_ll)],
+                [py_exe, str(compiler_py), str(test_file), str(out_ll)],
                 capture_output=True,
                 text=True,
             )

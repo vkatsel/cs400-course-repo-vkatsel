@@ -1,0 +1,20 @@
+(* Grammar for Practice 3 Language in EBNF *)
+(* Languages and Compilers Design *)
+
+program    ::= { statement } exit ;
+
+statement  ::= decl | assign ;
+
+decl       ::= "i32" [ "mut" ] ident "{" expr "}" ;
+
+assign     ::= ident ":=" expr ;
+
+exit       ::= "exit" operand ;
+
+expr       ::= term { ( "+" | "-" ) term } ;
+
+term       ::= factor { "*" factor } ;
+
+factor     ::= operand ;
+
+operand    ::= ident | number ;
