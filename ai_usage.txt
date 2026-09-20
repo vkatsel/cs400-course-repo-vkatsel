@@ -1057,3 +1057,84 @@ Model:
 Будь ласка, переглянь та підтвердь виконання або надай коментарі, після чого я внесу зміни, запущу перевірку тестів і зроблю коміт у гілку `practice-3`.
 
 ---
+
+User:
+[practice2_fixes_plan.md]
+L21: +
+L57: i'm not sure about how to format the ai_usage for every week. does the practice files actually say something about where it should be and containt what.
+
+Model:
+Усі три зауваження викладача закриті та зафіксовані у гілці `practice-3`:
+
+### 1. Щодо формату та розташування `ai_usage.txt`:
+- **Що вимагають завдання курсу**: методички (`w02-practice.md` та `w03-practice.md`) **не вимагають спеціального формату чи схеми** для `ai_usage.txt`, а лише зазначають: *«ai_usage.txt with your AI log»*.
+- **Чому викладач звернув увагу**: у [README.md](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/README.md) файл `ai_usage.txt` зазначений у структурі репозиторію, але його там не було через `.gitignore`. Викладач перевіряв «чистий checkout» репозиторію на Ubuntu і побачив, що у Moodle файл є, а в Git — відсутній.
+- **Як тепер організовано**:
+  - `ai_usage.txt` видалено з [.gitignore](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/.gitignore).
+  - Створено [ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt) у корені репозиторію з чіткими розділами `## Practice 2` та `## Practice 3`.
+  - Оновлено скрипт [.agents/log_ai_usage.py](file:///home/ubuntu/cs400/.agents/log_ai_usage.py), щоб майбутні логи автоматично дублювалися у файл репозиторію.
+
+---
+
+### 2. Додавання `line:col` у дамп токенів:
+У [lexer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py) метод `Token.__repr__` тепер додає позицію:
+```text
+(i32, keyword, typename, 1:4) (mut, keyword, specifier, 1:8) (x, identifier, 1:12) ({, block, start, 1:13) (10, constant, numeric, 1:15) (}, block, end, 1:18) (\n, endline, 1:19)
+(var, identifier, 2:2) (t, identifier, 2:6) (\n, endline, 2:7)
+```
+
+---
+
+### 3. Організація `worked_example.txt`:
+- Файл перенесено з `tests/` до [examples/worked_example.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples/worked_example.txt).
+- Поруч створено еталонний дамп [examples/worked_example.tokens](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples/worked_example.tokens).
+- Папка `tests/` тепер містить лише тести компілятора, які запускаються через `run_tests.py`.
+
+---
+
+### Результати перевірки та коміт:
+- **`run_tests.py`**: 26 із 26 тестів пройдено + успішна перевірка `--ast`.
+- **`test_lexer.py`**: 12 із 12 тестів пройдено.
+- **Новий коміт**: `dda43d1` у гілці `practice-3`
+  - Повідомлення: `fix(lexer): add token position to dump, organize worked example, and track ai_usage.txt`
+
+---
+
+User:
+/plan ще щось що потрібно зробити?
+
+Model:
+У коді та структурі проєкту **все виконано на 100%**:
+
+### Чеклист виконаного:
+- [x] **Task 1 (Граматика EBNF)**: файл [grammar.ebnf](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/grammar.ebnf) у корені репозиторію та опис у [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py).
+- [x] **Task 2 (Парсер та AST)**: ручний рекурсивний спуск, ієрархія класів AST (`slots=True`), прапорець `--ast` з форматуванням у 2 пробіли, точні координати помилок `line:col`.
+- [x] **Task 3 (Tree-walk CodeGen)**: `CodeGenVisitor` обходить AST і генерує LLVM IR через `IRBuilder`, семантичні перевірки на вузлах AST.
+- [x] **Task 4 (Пріоритет операцій та ланцюжки)**: ланцюжки виразів `+`, `-`, `*` з пріоритетом і лівою асоціативністю, 6 нових валідних та 6 нових невалідних тестів.
+- [x] **Зауваження викладача до практики 2**:
+  - `line:col` додано до дампу токенів лексера (`--lex`).
+  - `tests/worked_example.txt` перенесено до [examples/worked_example.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples/worked_example.txt) з еталонним файлом токенів.
+  - `ai_usage.txt` додано в корінь репозиторію та розблоковано в `.gitignore`.
+- [x] **Тести**: 26/26 тестів компілятора + перевірка `--ast` + 12/12 юніт-тестів лексера пройдено без жодних помилок.
+- [x] **Git**: зміни закомічено в локальну гілку `practice-3`.
+
+---
+
+### Що залишається зробити для здачі (Git & Moodle):
+
+1. **Запушити гілку на GitHub**:
+   ```bash
+   git push -u origin practice-3
+   ```
+   *(Якщо хочеш, можу виконати команду push просто зараз)*.
+
+2. **Створити Pull Request**:
+   - На GitHub відкрити PR із гілки `practice-3` в `main`.
+   - Додати користувача **`vovaskochko`** як рев'юера (як вказано в правилах курсу).
+
+3. **Здати роботу в Moodle**:
+   - Посилання на GitHub-репозиторій.
+   - Посилання на відкритий Pull Request.
+   - Завантажити файл [ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt).
+
+---
