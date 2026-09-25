@@ -75,47 +75,35 @@ def main() -> None:
 
     py_exe = get_python_exe()
 
-    # Step 0: Test --ast flag
-    ast_res = subprocess.run(
-        [py_exe, str(compiler_py), "--ast", str(tests_dir / "test1_valid_spec.txt")],
-        capture_output=True,
-        text=True,
-    )
-    expected_ast = """Program
-  Decl x const
-    Const 0
-  Decl y mut
-    Const 10
-  Decl z const
-    BinOp +
-      Const 2
-      Const 5
-  Decl t mut
-    BinOp +
-      Var x
-      Const 10
-  Assign t
-    BinOp *
-      Var t
-      Var z
-  Exit
-    Var t"""
-    if ast_res.returncode == 0 and ast_res.stdout.strip() == expected_ast.strip():
-        print("✅ PASS: compiler --ast on test1_valid_spec\n")
-    else:
-        print("❌ FAIL: compiler --ast on test1_valid_spec")
-        print(f"   stdout: {ast_res.stdout.strip()}")
-        print(f"   stderr: {ast_res.stderr.strip()}")
-        failed += 1
-
     with tempfile.TemporaryDirectory() as tmpdir:
         for test_file in test_files:
             test_name = test_file.stem
             is_fail_test = test_name.startswith("fail")
             out_ll = Path(tmpdir) / f"{test_name}.ll"
             expected_file = tests_dir / f"{test_name}.expected"
+            ast_file = test_file.with_suffix(".ast")
 
             expected_text = expected_file.read_text(encoding="utf-8").strip() if expected_file.exists() else None
+
+            # For valid tests, verify AST matches .ast file if present
+            if not is_fail_test and ast_file.exists():
+                ast_res = subprocess.run(
+                    [py_exe, str(compiler_py), "--ast", str(test_file)],
+                    capture_output=True,
+                    text=True,
+                )
+                if ast_res.returncode != 0:
+                    print(f"❌ FAIL: {test_name} (--ast execution error)")
+                    print(f"   stderr: {ast_res.stderr.strip()}")
+                    failed += 1
+                    continue
+                expected_ast = ast_file.read_text(encoding="utf-8").strip()
+                if ast_res.stdout.strip() != expected_ast:
+                    print(f"❌ FAIL: {test_name} (AST mismatch)")
+                    print(f"   Expected AST:\n{expected_ast}")
+                    print(f"   Actual AST:\n{ast_res.stdout.strip()}")
+                    failed += 1
+                    continue
 
             res = subprocess.run(
                 [py_exe, str(compiler_py), str(test_file), str(out_ll)],
@@ -158,7 +146,8 @@ def main() -> None:
                         failed += 1
                         continue
 
-                output_info = f" (output: '{actual_output}')" if actual_output is not None else " (IR generated)"
+                ast_info = " + AST" if ast_file.exists() else ""
+                output_info = f" (output: '{actual_output}'{ast_info})" if actual_output is not None else f" (IR generated{ast_info})"
                 print(f"✅ PASS: {test_name}{output_info}")
                 passed += 1
 

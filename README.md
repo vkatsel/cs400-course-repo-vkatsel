@@ -14,7 +14,8 @@ Compiler implementation for Languages and Compilers Design (CS400).
 ├── tests/             # Test cases and expected outputs
 │   ├── run_tests.py   # Automated test runner
 │   ├── *.txt          # Source test programs
-│   └── *.expected     # Expected outputs / error messages
+│   ├── *.expected     # Expected outputs / error messages
+│   └── *.ast          # Reference AST dumps for valid programs
 ├── ai_usage.txt       # AI usage log for course submissions
 ├── README.md          # Project documentation
 └── .gitignore         # Git ignore rules

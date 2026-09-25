@@ -1,0 +1,13 @@
+Program
+  Decl counter mut
+    Const 10
+  Assign counter
+    BinOp -
+      Var counter
+      Const 1
+  Assign counter
+    BinOp -
+      Var counter
+      Const 2
+  Exit
+    Var counter

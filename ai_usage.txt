@@ -1138,3 +1138,67 @@ Model:
    - Завантажити файл [ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt).
 
 ---
+
+User:
+/plan чекай а шо мої останні промпти не записались в аі юзедж?
+
+Model:
+Ось що сталося і як це виправлено:
+
+### 1. Чому не додалися останні промпти:
+У скрипті логування [.agents/log_ai_usage.py](file:///home/ubuntu/cs400/.agents/log_ai_usage.py) при попередньому редагуванні випадково випав рядок `full_text = "\n".join(content_blocks)`, через що виникав `NameError`, який тихо перехоплювався блоком `except`. 
+- **Виправлено**: скрипт виправлено та перевірено.
+- **Оновлено**: усі останні діалоги (включно із зауваженнями щодо практики 2, обговоренням формату `ai_usage.txt` та питанням «ще щось що потрібно зробити?») тепер повністю зафіксовані в [ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt) та [w3-files/ai_usage.txt](file:///home/ubuntu/cs400/.agents/w3-files/ai_usage.txt).
+- **Створено коміт**: `docs(ai_usage): update log with recent turns`.
+
+---
+
+### 2. Щодо `git push`:
+Оскільки віддалений репозиторій налаштований через HTTPS (`https://github.com/vkatsel/cs400-course-repo-vkatsel.git`), команда `git push` вимагає введення твоїх GitHub-облікових даних (Username та Personal Access Token) в інтерактивному режимі.
+
+Будь ласка, виконай команду push у своєму терміналі:
+```bash
+cd /home/ubuntu/cs400/cs400-course-repo-vkatsel
+git push origin practice-3
+```
+
+Після цього відкривай Pull Request з `practice-3` у `main` і додавай рев'юера `vovaskochko`!
+
+---
+
+User:
+привіт, прийшов рев'ю на пр. треба виправити: Checked on clean checkout: everything matches the task, every position I compared is the same as mine, CRLF works, 26/26 in your runner. Accepted.
+
+Small thing: ExitNode inherits StmtNode, and visit_program uses match instead of accept. There are no .ast files for the valid tests.
+
+Model:
+Я проаналізував усі три зауваження рев'юера (`vovaskochko`):
+
+1. **`ExitNode inherits StmtNode`**:
+   - У нашій граматиці `program ::= { statement } exit` та `statement ::= decl | assign`.
+   - `exit` не є підвидом `statement`, тому `ExitNode` має успадковувати безпосередньо базовий клас `Node`, а не `StmtNode`.
+
+2. **`visit_program uses match instead of accept`**:
+   - Відповідно до класичного патерну Visitor з умови практики, на всіх вузлах AST додамо метод `accept(visitor)` (`DeclNode.accept` викликає `visitor.visit_decl(self)`, `ExitNode.accept` викликає `visitor.visit_exit(self)` тощо).
+   - У `CodeGenVisitor.visit_program` замінимо `match stmt:` на прямий виклик `stmt.accept(self)` та `node.exit.accept(self)`.
+
+3. **`There are no .ast files for the valid tests`**:
+   - Згенеруємо еталонні файли `tests/test*.ast` для всіх 12 валідних тестів.
+   - Оновимо [run_tests.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py), щоб раннер автоматично перевіряв вивід `compiler.py --ast <file.txt>` проти відповідного `<file.ast>` для кожного тесту.
+
+---
+
+Детальний план оформлено в артефакті:
+👉 [pr_review_fixes_plan.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/47b6f75f-7b10-4c3e-8d27-4e5d1ecf8727/pr_review_fixes_plan.md)
+
+Будь ласка, переглянь та підтвердь виконання, після чого я внесу зміни, протестую та підготую коміт.
+
+---
+
+User:
+[Approved] pr_review_fixes_plan.md
+
+Model:
+Запустив перевірку оновленого тестового раннера.
+
+---

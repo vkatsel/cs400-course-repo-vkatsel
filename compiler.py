@@ -38,6 +38,9 @@ class Node:
     def dump(self, indent: int = 0) -> str:
         raise NotImplementedError
 
+    def accept(self, visitor: "CodeGenVisitor"):
+        raise NotImplementedError
+
 
 @dataclass(slots=True)
 class ExprNode(Node):
@@ -51,6 +54,9 @@ class ConstNode(ExprNode):
     def dump(self, indent: int = 0) -> str:
         return f"{' ' * (indent * 2)}Const {self.value}"
 
+    def accept(self, visitor: "CodeGenVisitor") -> ir.Value:
+        return visitor.visit_const(self)
+
 
 @dataclass(slots=True)
 class VarNode(ExprNode):
@@ -58,6 +64,9 @@ class VarNode(ExprNode):
 
     def dump(self, indent: int = 0) -> str:
         return f"{' ' * (indent * 2)}Var {self.name}"
+
+    def accept(self, visitor: "CodeGenVisitor") -> ir.Value:
+        return visitor.visit_var(self)
 
 
 @dataclass(slots=True)
@@ -73,6 +82,9 @@ class BinOpNode(ExprNode):
             f"{self.left.dump(indent + 1)}\n"
             f"{self.right.dump(indent + 1)}"
         )
+
+    def accept(self, visitor: "CodeGenVisitor") -> ir.Value:
+        return visitor.visit_binop(self)
 
 
 @dataclass(slots=True)
@@ -91,6 +103,9 @@ class DeclNode(StmtNode):
         kind = "mut" if self.mutable else "const"
         return f"{prefix}Decl {self.name} {kind}\n{self.init.dump(indent + 1)}"
 
+    def accept(self, visitor: "CodeGenVisitor") -> None:
+        visitor.visit_decl(self)
+
 
 @dataclass(slots=True)
 class AssignNode(StmtNode):
@@ -101,14 +116,20 @@ class AssignNode(StmtNode):
         prefix = " " * (indent * 2)
         return f"{prefix}Assign {self.name}\n{self.value.dump(indent + 1)}"
 
+    def accept(self, visitor: "CodeGenVisitor") -> None:
+        visitor.visit_assign(self)
+
 
 @dataclass(slots=True)
-class ExitNode(StmtNode):
+class ExitNode(Node):
     value: ExprNode
 
     def dump(self, indent: int = 0) -> str:
         prefix = " " * (indent * 2)
         return f"{prefix}Exit\n{self.value.dump(indent + 1)}"
+
+    def accept(self, visitor: "CodeGenVisitor") -> None:
+        visitor.visit_exit(self)
 
 
 @dataclass(slots=True)
@@ -122,6 +143,9 @@ class ProgramNode(Node):
             lines.append(stmt.dump(indent + 1))
         lines.append(self.exit.dump(indent + 1))
         return "\n".join(lines)
+
+    def accept(self, visitor: "CodeGenVisitor") -> None:
+        visitor.visit_program(self)
 
 
 class Parser:
@@ -348,37 +372,35 @@ class CodeGenVisitor:
 
         self.symbols: dict[str, Symbol] = {}
 
-    def visit_expr(self, node: ExprNode) -> ir.Value:
-        match node:
-            case ConstNode(value=val):
-                return ir.Constant(self.i32_type, val)
-            case VarNode(line=l, col=c, name=name):
-                if name not in self.symbols:
-                    raise CompileError(
-                        l, c, f"variable '{name}' is used before its declaration"
-                    )
-                return self.builder.load(self.symbols[name].alloca, name=name)
-            case BinOpNode(line=l, col=c, op=op, left=left, right=right):
-                left_val = self.visit_expr(left)
-                right_val = self.visit_expr(right)
-                match op:
-                    case "+":
-                        return self.builder.add(left_val, right_val)
-                    case "-":
-                        return self.builder.sub(left_val, right_val)
-                    case "*":
-                        return self.builder.mul(left_val, right_val)
-                    case _:
-                        raise CompileError(l, c, f"unsupported operator '{op}'")
+    def visit_const(self, node: ConstNode) -> ir.Value:
+        return ir.Constant(self.i32_type, node.value)
+
+    def visit_var(self, node: VarNode) -> ir.Value:
+        if node.name not in self.symbols:
+            raise CompileError(
+                node.line, node.col, f"variable '{node.name}' is used before its declaration"
+            )
+        return self.builder.load(self.symbols[node.name].alloca, name=node.name)
+
+    def visit_binop(self, node: BinOpNode) -> ir.Value:
+        left_val = node.left.accept(self)
+        right_val = node.right.accept(self)
+        match node.op:
+            case "+":
+                return self.builder.add(left_val, right_val)
+            case "-":
+                return self.builder.sub(left_val, right_val)
+            case "*":
+                return self.builder.mul(left_val, right_val)
             case _:
-                raise CompileError(node.line, node.col, "unknown expression node")
+                raise CompileError(node.line, node.col, f"unsupported operator '{node.op}'")
 
     def visit_decl(self, node: DeclNode) -> None:
         if node.name in self.symbols:
             raise CompileError(
                 node.line, node.col, f"variable '{node.name}' is already declared"
             )
-        init_val = self.visit_expr(node.init)
+        init_val = node.init.accept(self)
         slot = self.builder.alloca(self.i32_type, name=node.name)
         self.builder.store(init_val, slot)
         self.symbols[node.name] = Symbol(
@@ -397,23 +419,19 @@ class CodeGenVisitor:
             raise CompileError(
                 node.line, node.col, f"cannot assign to '{node.name}': it is not mut"
             )
-        val = self.visit_expr(node.value)
+        val = node.value.accept(self)
         self.builder.store(val, sym.alloca)
 
     def visit_exit(self, node: ExitNode) -> None:
-        exit_val = self.visit_expr(node.value)
+        exit_val = node.value.accept(self)
         fmt_ptr = self.builder.bitcast(self.fmt_var, ir.PointerType(self.i8_type))
         self.builder.call(self.printf_fn, [fmt_ptr, exit_val])
         self.builder.ret(ir.Constant(self.i32_type, 0))
 
     def visit_program(self, node: ProgramNode) -> None:
         for stmt in node.statements:
-            match stmt:
-                case DeclNode():
-                    self.visit_decl(stmt)
-                case AssignNode():
-                    self.visit_assign(stmt)
-        self.visit_exit(node.exit)
+            stmt.accept(self)
+        node.exit.accept(self)
 
 
 def parse_ast(source_bytes: bytes) -> ProgramNode:
