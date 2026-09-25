@@ -1,0 +1,15 @@
+Program
+  Decl base const
+    Const 6
+  Decl multiplier const
+    Const 7
+  Decl total mut
+    BinOp *
+      Var base
+      Var multiplier
+  Assign total
+    BinOp +
+      Var total
+      Const 8
+  Exit
+    Var total

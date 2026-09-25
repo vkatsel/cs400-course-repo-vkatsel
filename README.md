@@ -6,11 +6,16 @@ Compiler implementation for Languages and Compilers Design (CS400).
 
 ```text
 .
-├── compiler.py        # Main compiler entry point
+├── compiler.py        # Main compiler entry point (parser, AST, code generation)
+├── grammar.ebnf       # Formal EBNF grammar definition
+├── examples/          # Example source programs and token dumps
+│   ├── worked_example.txt
+│   └── worked_example.tokens
 ├── tests/             # Test cases and expected outputs
 │   ├── run_tests.py   # Automated test runner
 │   ├── *.txt          # Source test programs
-│   └── *.expected     # Expected outputs / error messages
+│   ├── *.expected     # Expected outputs / error messages
+│   └── *.ast          # Reference AST dumps for valid programs
 ├── ai_usage.txt       # AI usage log for course submissions
 ├── README.md          # Project documentation
 └── .gitignore         # Git ignore rules
@@ -34,6 +39,12 @@ Compile a source program into LLVM IR:
 
 ```bash
 python3 compiler.py input.txt output.ll
+```
+
+Print the Abstract Syntax Tree (AST):
+
+```bash
+python3 compiler.py --ast input.txt
 ```
 
 ### Executing the Compiled IR

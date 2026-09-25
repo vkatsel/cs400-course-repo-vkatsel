@@ -1,5 +1,10 @@
+import sys
 import unittest
-from lexer import lex, Token, CompileError
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lexer import CompileError, Token, lex
 
 class TestLexer(unittest.TestCase):
     def test_worked_example(self) -> None:

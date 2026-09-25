@@ -5,6 +5,17 @@ import shutil
 import tempfile
 from pathlib import Path
 
+def get_python_exe() -> str:
+    try:
+        import llvmlite  # noqa: F401
+        return sys.executable
+    except ImportError:
+        for candidate in ("/home/ubuntu/lcd/bin/python", str(Path.home() / "lcd/bin/python")):
+            if Path(candidate).exists():
+                return candidate
+        return sys.executable
+
+
 def run_ir(out_ll: Path) -> str | None:
     if shutil.which("lli") is not None:
         res = subprocess.run(["lli", str(out_ll)], capture_output=True, text=True)
@@ -37,7 +48,8 @@ func_ptr = engine.get_function_address('main')
 cfunc = ctypes.CFUNCTYPE(ctypes.c_int32)(func_ptr)
 cfunc()
 """
-    res = subprocess.run([sys.executable, "-c", jit_script], capture_output=True, text=True)
+    py_exe = get_python_exe()
+    res = subprocess.run([py_exe, "-c", jit_script], capture_output=True, text=True)
     if res.returncode == 0:
         return res.stdout.strip()
     return None
@@ -61,17 +73,40 @@ def main() -> None:
 
     print(f"Running {len(test_files)} tests...\n")
 
+    py_exe = get_python_exe()
+
     with tempfile.TemporaryDirectory() as tmpdir:
         for test_file in test_files:
             test_name = test_file.stem
             is_fail_test = test_name.startswith("fail")
             out_ll = Path(tmpdir) / f"{test_name}.ll"
             expected_file = tests_dir / f"{test_name}.expected"
+            ast_file = test_file.with_suffix(".ast")
 
             expected_text = expected_file.read_text(encoding="utf-8").strip() if expected_file.exists() else None
 
+            # For valid tests, verify AST matches .ast file if present
+            if not is_fail_test and ast_file.exists():
+                ast_res = subprocess.run(
+                    [py_exe, str(compiler_py), "--ast", str(test_file)],
+                    capture_output=True,
+                    text=True,
+                )
+                if ast_res.returncode != 0:
+                    print(f"❌ FAIL: {test_name} (--ast execution error)")
+                    print(f"   stderr: {ast_res.stderr.strip()}")
+                    failed += 1
+                    continue
+                expected_ast = ast_file.read_text(encoding="utf-8").strip()
+                if ast_res.stdout.strip() != expected_ast:
+                    print(f"❌ FAIL: {test_name} (AST mismatch)")
+                    print(f"   Expected AST:\n{expected_ast}")
+                    print(f"   Actual AST:\n{ast_res.stdout.strip()}")
+                    failed += 1
+                    continue
+
             res = subprocess.run(
-                [sys.executable, str(compiler_py), str(test_file), str(out_ll)],
+                [py_exe, str(compiler_py), str(test_file), str(out_ll)],
                 capture_output=True,
                 text=True,
             )
@@ -111,7 +146,8 @@ def main() -> None:
                         failed += 1
                         continue
 
-                output_info = f" (output: '{actual_output}')" if actual_output is not None else " (IR generated)"
+                ast_info = " + AST" if ast_file.exists() else ""
+                output_info = f" (output: '{actual_output}'{ast_info})" if actual_output is not None else f" (IR generated{ast_info})"
                 print(f"✅ PASS: {test_name}{output_info}")
                 passed += 1
 

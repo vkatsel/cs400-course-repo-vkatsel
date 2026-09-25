@@ -1,0 +1,2 @@
+(i32, keyword, typename, 1:4) (mut, keyword, specifier, 1:8) (x, identifier, 1:12) ({, block, start, 1:13) (10, constant, numeric, 1:15) (}, block, end, 1:18) (\n, endline, 1:19)
+(var, identifier, 2:2) (t, identifier, 2:6) (\n, endline, 2:7)

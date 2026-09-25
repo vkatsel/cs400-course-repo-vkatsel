@@ -1,0 +1,11 @@
+Program
+  Decl x const
+    Const 100
+  Decl y mut
+    Const 200
+  Assign y
+    BinOp -
+      Var y
+      Var x
+  Exit
+    Var y

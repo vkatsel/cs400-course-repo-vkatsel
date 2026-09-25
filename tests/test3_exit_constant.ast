@@ -1,0 +1,5 @@
+Program
+  Decl dummy const
+    Const 0
+  Exit
+    Const 42

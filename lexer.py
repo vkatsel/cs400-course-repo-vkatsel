@@ -20,13 +20,14 @@ class Token:
     subkind: str | None = None
 
     def __repr__(self) -> str:
+        loc = f"{self.line}:{self.col}"
         match self.kind:
             case "endline":
-                return r"(\n, endline)"
+                return rf"(\n, endline, {loc})"
             case _ if self.subkind is not None:
-                return f"({self.text}, {self.kind}, {self.subkind})"
+                return f"({self.text}, {self.kind}, {self.subkind}, {loc})"
             case _:
-                return f"({self.text}, {self.kind})"
+                return f"({self.text}, {self.kind}, {loc})"
 
     @property
     def is_keyword(self) -> bool:
