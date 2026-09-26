@@ -1,20 +1,22 @@
-(* Grammar for Practice 3 Language in EBNF *)
+(* Grammar for Practice 4 Language in EBNF *)
 (* Languages and Compilers Design *)
 
 program    ::= { statement } exit ;
 
 statement  ::= decl | assign ;
 
-decl       ::= "i32" [ "mut" ] ident "{" expr "}" ;
+decl       ::= type [ "mut" ] ident "{" expr "}" ;
+
+type       ::= "i32" | "i64" | "bool" ;
 
 assign     ::= ident ":=" expr ;
 
-exit       ::= "exit" operand ;
+exit       ::= "exit" factor ;
 
-expr       ::= term { ( "+" | "-" ) term } ;
+expr       ::= arith [ ( "==" | "!=" ) arith ] ;
+
+arith      ::= term { ( "+" | "-" ) term } ;
 
 term       ::= factor { "*" factor } ;
 
-factor     ::= operand ;
-
-operand    ::= ident | number ;
+factor     ::= number | "true" | "false" | ident ;

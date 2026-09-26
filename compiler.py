@@ -14,7 +14,16 @@ EBNF Grammar:
 """
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+for _p in (
+    "/home/ubuntu/lcd/lib/python3.12/site-packages",
+    str(Path.home() / "lcd/lib/python3.12/site-packages"),
+):
+    if _p not in sys.path and Path(_p).exists():
+        sys.path.insert(0, _p)
 
 import llvmlite.binding as llvm
 from lexer import CompileError, Token, lex, print_tokens
@@ -38,13 +47,13 @@ class Node:
     def dump(self, indent: int = 0) -> str:
         raise NotImplementedError
 
-    def accept(self, visitor: "CodeGenVisitor"):
+    def accept(self, visitor: Any):
         raise NotImplementedError
 
 
 @dataclass(slots=True)
 class ExprNode(Node):
-    pass
+    type: str | None = field(default=None, init=False)
 
 
 @dataclass(slots=True)
@@ -54,18 +63,31 @@ class ConstNode(ExprNode):
     def dump(self, indent: int = 0) -> str:
         return f"{' ' * (indent * 2)}Const {self.value}"
 
-    def accept(self, visitor: "CodeGenVisitor") -> ir.Value:
+    def accept(self, visitor: Any) -> Any:
         return visitor.visit_const(self)
+
+
+@dataclass(slots=True)
+class BoolNode(ExprNode):
+    value: bool
+
+    def dump(self, indent: int = 0) -> str:
+        prefix = " " * (indent * 2)
+        return f"{prefix}Bool {'true' if self.value else 'false'}"
+
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_bool(self)
 
 
 @dataclass(slots=True)
 class VarNode(ExprNode):
     name: str
+    decl: "DeclNode | None" = field(default=None, init=False)
 
     def dump(self, indent: int = 0) -> str:
         return f"{' ' * (indent * 2)}Var {self.name}"
 
-    def accept(self, visitor: "CodeGenVisitor") -> ir.Value:
+    def accept(self, visitor: Any) -> Any:
         return visitor.visit_var(self)
 
 
@@ -83,7 +105,7 @@ class BinOpNode(ExprNode):
             f"{self.right.dump(indent + 1)}"
         )
 
-    def accept(self, visitor: "CodeGenVisitor") -> ir.Value:
+    def accept(self, visitor: Any) -> Any:
         return visitor.visit_binop(self)
 
 
@@ -95,29 +117,32 @@ class StmtNode(Node):
 @dataclass(slots=True)
 class DeclNode(StmtNode):
     name: str
+    type_name: str
     mutable: bool
     init: ExprNode
+    alloca: ir.AllocaInstr | None = field(default=None, init=False)
 
     def dump(self, indent: int = 0) -> str:
         prefix = " " * (indent * 2)
         kind = "mut" if self.mutable else "const"
-        return f"{prefix}Decl {self.name} {kind}\n{self.init.dump(indent + 1)}"
+        return f"{prefix}Decl {self.name} {self.type_name} {kind}\n{self.init.dump(indent + 1)}"
 
-    def accept(self, visitor: "CodeGenVisitor") -> None:
-        visitor.visit_decl(self)
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_decl(self)
 
 
 @dataclass(slots=True)
 class AssignNode(StmtNode):
     name: str
     value: ExprNode
+    decl: "DeclNode | None" = field(default=None, init=False)
 
     def dump(self, indent: int = 0) -> str:
         prefix = " " * (indent * 2)
         return f"{prefix}Assign {self.name}\n{self.value.dump(indent + 1)}"
 
-    def accept(self, visitor: "CodeGenVisitor") -> None:
-        visitor.visit_assign(self)
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_assign(self)
 
 
 @dataclass(slots=True)
@@ -128,8 +153,8 @@ class ExitNode(Node):
         prefix = " " * (indent * 2)
         return f"{prefix}Exit\n{self.value.dump(indent + 1)}"
 
-    def accept(self, visitor: "CodeGenVisitor") -> None:
-        visitor.visit_exit(self)
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_exit(self)
 
 
 @dataclass(slots=True)
@@ -144,8 +169,8 @@ class ProgramNode(Node):
         lines.append(self.exit.dump(indent + 1))
         return "\n".join(lines)
 
-    def accept(self, visitor: "CodeGenVisitor") -> None:
-        visitor.visit_program(self)
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_program(self)
 
 
 class Parser:
@@ -172,7 +197,7 @@ class Parser:
             )
         return (1, 1)
 
-    def parse_operand(self) -> ExprNode:
+    def parse_factor(self) -> ExprNode:
         tok = self.peek()
         if tok is None:
             line, col = self._end_of_line_loc()
@@ -182,6 +207,9 @@ class Parser:
         if tok.is_number:
             self.eat()
             return ConstNode(tok.line, tok.col, int(tok.text))
+        if tok.is_boolean or (tok.is_keyword and tok.text in ("true", "false")):
+            self.eat()
+            return BoolNode(tok.line, tok.col, tok.text == "true")
         if tok.is_identifier:
             self.eat()
             return VarNode(tok.line, tok.col, tok.text)
@@ -189,8 +217,8 @@ class Parser:
             tok.line, tok.col, f"expected a constant or a variable, got '{tok.text}'"
         )
 
-    def parse_factor(self) -> ExprNode:
-        return self.parse_operand()
+    def parse_operand(self) -> ExprNode:
+        return self.parse_factor()
 
     def parse_term(self) -> ExprNode:
         node = self.parse_factor()
@@ -204,7 +232,7 @@ class Parser:
                 break
         return node
 
-    def parse_expr(self) -> ExprNode:
+    def parse_arith(self) -> ExprNode:
         node = self.parse_term()
         while True:
             tok = self.peek()
@@ -216,8 +244,25 @@ class Parser:
                 break
         return node
 
+    def parse_expr(self) -> ExprNode:
+        node = self.parse_arith()
+        tok = self.peek()
+        if tok is not None and tok.is_operator and tok.text in ("==", "!="):
+            op_tok = self.eat()
+            right = self.parse_arith()
+            node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, right)
+            next_tok = self.peek()
+            if next_tok is not None and next_tok.is_operator and next_tok.text in ("==", "!="):
+                raise CompileError(
+                    next_tok.line,
+                    next_tok.col,
+                    "multiple comparisons in one expression are not allowed",
+                )
+        return node
+
     def parse_decl(self) -> DeclNode:
-        self.eat()  # "i32"
+        type_tok = self.eat()  # "i32", "i64", "bool"
+        type_name = type_tok.text
         mutable = False
         tok = self.peek()
         if tok is not None and tok.text == "mut":
@@ -262,7 +307,9 @@ class Parser:
                 extra.line, extra.col, f"unexpected '{extra.text}' after the statement"
             )
 
-        return DeclNode(name_tok.line, name_tok.col, name_tok.text, mutable, init_expr)
+        return DeclNode(
+            name_tok.line, name_tok.col, name_tok.text, type_name, mutable, init_expr
+        )
 
     def parse_assign(self) -> AssignNode:
         name_tok = self.eat()
@@ -291,7 +338,7 @@ class Parser:
 
     def parse_exit(self) -> ExitNode:
         exit_tok = self.eat()
-        operand = self.parse_operand()
+        operand = self.parse_factor()
         if (extra := self.peek()) is not None:
             raise CompileError(
                 extra.line, extra.col, f"unexpected '{extra.text}' after the statement"
@@ -303,7 +350,7 @@ class Parser:
         if tok is None:
             line, col = self._end_of_line_loc()
             raise CompileError(line, col, "unexpected end of line")
-        if tok.text == "i32":
+        if tok.text in ("i32", "i64", "bool"):
             return self.parse_decl()
         if tok.is_identifier:
             return self.parse_assign()
@@ -375,6 +422,9 @@ class CodeGenVisitor:
     def visit_const(self, node: ConstNode) -> ir.Value:
         return ir.Constant(self.i32_type, node.value)
 
+    def visit_bool(self, node: BoolNode) -> ir.Value:
+        return ir.Constant(ir.IntType(1), 1 if node.value else 0)
+
     def visit_var(self, node: VarNode) -> ir.Value:
         if node.name not in self.symbols:
             raise CompileError(
@@ -392,6 +442,8 @@ class CodeGenVisitor:
                 return self.builder.sub(left_val, right_val)
             case "*":
                 return self.builder.mul(left_val, right_val)
+            case "==" | "!=":
+                return self.builder.icmp_signed(node.op, left_val, right_val)
             case _:
                 raise CompileError(node.line, node.col, f"unsupported operator '{node.op}'")
 
@@ -447,7 +499,6 @@ def compile_source(source_bytes: bytes) -> ir.Module:
     codegen = CodeGenVisitor(module)
     codegen.visit_program(ast)
     return module
-
 
 def main() -> None:
     if len(sys.argv) == 3 and sys.argv[1] == "--lex":

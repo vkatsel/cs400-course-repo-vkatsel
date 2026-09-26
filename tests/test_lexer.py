@@ -119,5 +119,28 @@ class TestLexer(unittest.TestCase):
             lex(source)
         self.assertIn("line 1:7: unexpected byte '\\xff'", str(ctx.exception))
 
+    def test_comparisons_and_literals(self) -> None:
+        source = b"bool a{true == false}\ni64 b{a != true}"
+        lines = lex(source)
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0][0], Token("keyword", "bool", 1, 1, "typename"))
+        self.assertEqual(lines[0][3], Token("keyword", "true", 1, 8, "boolean"))
+        self.assertEqual(lines[0][4], Token("operator", "==", 1, 13))
+        self.assertEqual(lines[0][5], Token("keyword", "false", 1, 16, "boolean"))
+        self.assertEqual(lines[1][0], Token("keyword", "i64", 2, 1, "typename"))
+        self.assertEqual(lines[1][4], Token("operator", "!=", 2, 9))
+
+    def test_single_equals_error(self) -> None:
+        source = b"a = 1"
+        with self.assertRaises(CompileError) as ctx:
+            lex(source)
+        self.assertIn("line 1:3: expected '==' (a single '=' is not an operator)", str(ctx.exception))
+
+    def test_single_exclamation_error(self) -> None:
+        source = b"!b"
+        with self.assertRaises(CompileError) as ctx:
+            lex(source)
+        self.assertIn("line 1:1: expected '!=' (a single '!' is not an operator)", str(ctx.exception))
+
 if __name__ == "__main__":
     unittest.main()
