@@ -1,1204 +1,587 @@
 # AI Usage Log - CS400
 
-## Practice 2
+## Practice 4
 
-<!-- session: aeb32e3f-eaeb-4f51-a05d-208641d44136 -->
+<!-- session: a1d51792-61dd-448f-960f-bac11550b5f7 -->
 User:
-hello. please, scaffold a repo inside @[cs400-course-repo-vkatsel] as stated in @[.agents/w2-files/w02-practice.md]. You canorganize the needed structure and copy the files form practice 1 from @../w1
+/plan прів. працюємо над @[.agents/w4-files/w04-practice.md]. Дай будь ласка оверв'ю того, що треба зробити. в окремому артевфакті поясни основні концепції та що важливо вивчити і запам'ятати. В іншому артефакті - накидай план виконання конкретних тасок та план тестування кожної, відповідно до умов практики
 
 Model:
-The repository structure inside [cs400-course-repo-vkatsel](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel) has been scaffolded according to the requirements in [.agents/w2-files/w02-practice.md](file:///home/ubuntu/cs400/.agents/w2-files/w02-practice.md):
-
-### Repository Layout
-```text
-cs400-course-repo-vkatsel/
-├── compiler.py        # Practice 1 compiler entry point (copied from /home/ubuntu/w1)
-├── tests/             # Tests folder
-│   ├── run_tests.py   # Automated test runner
-│   ├── *.txt          # Practice 1 valid & fail test cases
-│   └── *.expected     # Expected output / error message for each test
-├── README.md          # Guide on how to run compiler and tests
-├── ai_usage.txt       # AI interaction log for Moodle submissions
-└── .gitignore         # Ignores *.ll, *.o, binaries, and virtual environments
-```
-
-### Git Setup
-1. **`main` branch**: Committed Practice 1 compiler, tests, and documentation (`feat: practice 1 compiler and tests`).
-2. **`practice-2` branch**: Created and switched to `practice-2` branch, ready for Task 1 (lexer implementation) and Task 2.
+Ось огляд того, що необхідно реалізувати у **Практиці 4**, а також створені матеріали для вивчення та затвердження плану.
 
 ---
 
-User:
-будь ласка створи мені еліас на команду  git lg з красивим виводом гіт історії. також, чому твій посту-інтеракшн хук на логінг в аі юзедж не спрацював цього разу? файл @[cs400-course-repo-vkatsel/ai_usage.txt] знаходиться в репо
+### 📌 Короткий огляд завдань Практики 4
 
-Model:
-### 1. Еліас `git lg`
+Основна мета практики — винести всі семантичні перевірки з генератора коду в **окремий семантичний прохід (`SemanticChecker`)** і розширити мову до трьох типів:
 
-Еліас успішно створено та налаштовано в репозиторії [`cs400-course-repo-vkatsel`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel):
+1. **Task 1 — Фронтенд (0.5 бала)**:
+   - **Лексер**: ключові слова `i64`, `bool`, `true`, `false`; оператори `==` та `!=`. Окремі `=` та `!` вважаються лексичними помилками з `line:column`.
+   - **Граматика та AST**: вирази діляться на `expr` (де дозволено щонайбільше одне порівняння), `arith` (`+`, `-`), `term` (`*`), `factor` (число, `true`, `false`, ідентифікатор).
+   - Вузол `DeclNode` зберігає ім'я типу; `--ast` виводить тип у кожному оголошенні (наприклад, `Decl y i64 mut`).
 
-```bash
-git config alias.lg "log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit"
-```
+2. **Task 2 — Семантичний прохід (`SemanticChecker`) (1.5 бала)**:
+   - Окремий прохід деревом **до** генерації IR.
+   - Володіє таблицею символів: `name -> DeclNode`.
+   - Перевіряє правила мови:
+     - Оголошено один раз, оголошено до використання, `mut` перед `:=`.
+     - Типи констант: до $2^{31}-1$ це `i32`, далі до $2^{63}-1$ це `i64`, більше — помилка.
+     - Арифметика: тільки цілі числа; результат — ширший тип (`i32 + i64 = i64`). Булеві значення в арифметиці заборонені.
+     - Порівняння: числа або булеві значення; результат — `bool`.
+     - Приведення: **тільки widening** (`i32 -> i64`). Будь-яке звуження (narrowing) або змішування `bool` з числами відхиляється з `line:column`.
+   - Декорує дерево: додає `node.type` для виразів та `node.decl` для змінних.
 
-Вивід виглядає компактно з гілками, кольоровими хешами, авторами та відносним часом:
-```text
-* a898843 - (HEAD -> practice-2, main) feat: practice 1 compiler and tests (7 minutes ago) <Vadym Katsel>
-* 9cf267d - (origin/main, origin/HEAD) Initial commit (30 minutes ago) <Vadym Katsel>
-```
-
-> [!TIP]
-> Якщо ви хочете використовувати цей еліас глобально в усіх інших репозиторіях поза середовищем snap, виконайте у вашому хост-терміналі:
-> ```bash
-> git config --global alias.lg "log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit"
-> ```
+3. **Task 3 — Генерація LLVM IR з типізованого дерева (1 бал)**:
+   - `CodeGenVisitor` **не робить жодних перевірок** — повністю довіряє семантичному проходу.
+   - Додається функція `coerce(val, have, want)`: вставляє `sext` при переході `i32 -> i64` у 5 місцях.
+   - Порівняння транслюються в `icmp_signed`.
+   - `exit`: для чисел виводить через `printf("%lld")`, для булевих — обирає між `"true"` та `"false"` через LLVM-інструкцію `select`.
+   - Тести: директорії `tests/ok` та `tests/err` (щонайменше по 6 програм у кожній), оновлення існуючих тестів Practice 3.
 
 ---
 
-### 2. Чому не спрацював хук для `ai_usage.txt`?
+### 📂 Створені артефакти
 
-У файлі конфігурації [`.gemini/config/hooks.json`](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/config/hooks.json) було визначено команду:
-```bash
-echo -e "User:\n$AGY_INPUT\n\nModel:\n$AGY_OUTPUT\n\n---\n" >> ai_usage.txt
-```
+1. 📘 **Концептуальний гід та підготовка до здачі**:
+   - Відкрий артефакт [practice4_concepts_guide.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/a1d51792-61dd-448f-960f-bac11550b5f7/practice4_concepts_guide.md)
+   - Містить теорію: чому перевірки винесені з CodeGen, архітектурний контракт декорованого AST, таблиця символів, правила widening vs narrowing, роботу інструкцій `sext`, `icmp`, `select`, а також готові відповіді на запитання викладача.
 
-Хук насправді викликався, але не записав результат у репозиторій з трьох причин:
+2. 📋 **План реалізації та тестування**:
+   - Переглянь детальний план [practice4_implementation_plan.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/a1d51792-61dd-448f-960f-bac11550b5f7/practice4_implementation_plan.md)
+   - Містить розбивку по компонентах (`lexer.py`, `grammar.ebnf`, `compiler.py`, `tests/`), структуру наборів `tests/ok` і `tests/err` та команди перевірки для демонстрації.
 
-1. **Робоча директорія (CWD)**: хук запускається з директорії, де лежить сам `hooks.json` (`~/.gemini/config/`). Відносний шлях `>> ai_usage.txt` призвів до запису у файл `~/.gemini/config/ai_usage.txt`, а не в репозиторій [`cs400-course-repo-vkatsel/ai_usage.txt`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt).
-2. **Змінні оточення**: Antigravity не передає змінні `$AGY_INPUT` чи `$AGY_OUTPUT` в `env`. Натомість контекст передається у вигляді JSON на **`stdin`** (включаючи `transcriptPath` та `workspacePaths`). Через це підставлялись пусті рядки.
-3. **Shell-контракт**: хуки викликаються через `/bin/sh -c` (dash в Ubuntu), де `echo -e` не інтерпретує escape-послідовності, а `PostInvocation` очікує валідний JSON у `stdout`.
-
-#### Що виправлено:
-1. Створено скрипт-обробник [`log_ai_usage.py`](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/config/log_ai_usage.py), який:
-   - Отримує `transcriptPath` та `workspacePaths` зі `stdin`.
-   - Знаходить цільовий [`ai_usage.txt`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt) у репозиторії.
-   - Витягує повідомлення користувача та відповіді моделі з транскрипту й записує їх у форматі `User: ... Model: ... ---`.
-   - Повертає очікуваний хуком JSON у `stdout`.
-2. Оновлено [`.gemini/config/hooks.json`](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/config/hooks.json) на виклик цього скрипта.
-3. Попередній діалог (Turn 1) вже синхронізовано в [`cs400-course-repo-vkatsel/ai_usage.txt`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt), а всі наступні запити автоматично дописуватимуться хуком.
+Будь ласка, ознайомся з планом та підтверди його або вкажи побажання, щоб ми перейшли до виконання!
 
 ---
 
 User:
-окей, продовжумємо працювати над @[.agents/w2-files/w02-practice.md]. нагадай на чому ми закінчили?
+/plan можеш артефакти в цьому воркспейсі додавати може в .agents/artifacts/ або шось таке. бо незручно
 
 Model:
-Ми завершили підготовчий етап і повністю налаштували робоче середовище:
+Зроблено! Скопіював обидва документи безпосередньо у робочу директорію проєкту:
 
-### Що було зроблено:
-1. **Створено структуру репозиторію** в [`cs400-course-repo-vkatsel`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel):
-   - Перенесено код та тести з Практики 1 ([`compiler.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py), папка [`tests/`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/)).
-   - Додано очікувані виводи ([`*.expected`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/)) та скрипт автотестування [`tests/run_tests.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py).
-   - Створено документацію [`README.md`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/README.md) та [`.gitignore`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/.gitignore).
-2. **Налаштовано Git**:
-   - Початковий стан Практики 1 закомічено в гілку `main`.
-   - Створено та перемкнутося на робочу гілку **`practice-2`**.
-   - Додано красивий еліас `git lg`.
-3. **Виправлено хук логування AI**:
-   - Налаштовано [`log_ai_usage.py`](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/config/log_ai_usage.py), діалоги тепер автоматично записуються в [`ai_usage.txt`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt).
+📂 **Розташування у воркспейсі:**
+1. 📘 **Концепції, теорія та підготовка до запитань:**  
+   [`practice4_concepts_guide.md`](file:///home/ubuntu/cs400/.agents/artifacts/practice4_concepts_guide.md)
+2. 📋 **Детальний план виконання та тестування:**  
+   [`practice4_implementation_plan.md`](file:///home/ubuntu/cs400/.agents/artifacts/practice4_implementation_plan.md)
 
----
+*(Вони також залишаються доступними як інтерактивні артефакти в панелі асистента).*
 
-### На чому ми зупинилися та що треба робити далі за [`w02-practice.md`](file:///home/ubuntu/cs400/.agents/w2-files/w02-practice.md):
+Усі файли розміщені строго в `.agents/artifacts/`, що відповідає правилу не засмічувати репозиторій курсу `cs400-course-repo-vkatsel`.
 
-Зараз ми знаходимося на старті реалізації завдань Практики 2 у гілці `practice-2`:
-
-1. **Task 1 — Лексер як скінченний автомат (2 бали)**:
-   - Реалізувати побайтовий лексер-автомат (без `re`, без `split`).
-   - Виділення токенів: `keyword` (`i32`, `mut`, `exit`), `identifier`, `number`, `block` (`{`, `}`), `operator` (`:=`, `+`, `-`, `*`), `\n`.
-   - Збереження позицій `line:col` (1-based) для кожного токена.
-   - Обробка лексичних помилок (`unexpected byte`, незакрита `{` до кінця рядка, буква всередині числа, одиночний `:`).
-   - Верифікація роботи лексера на прикладі з умови (`i32 mut x{ 10 }\n var t`).
-
-2. **Task 2 — Синтаксис, семантика та генерація IR (1 бал)**:
-   - Підтримка нового синтаксису: `i32 x{...}`, `i32 mut y{...}`, операції в `{...}`, присвоєння `y := ...` (тільки для `mut`), `exit <var/num>`.
-   - Перевірка правил із зазначенням `line:col` (присвоєння не-mut, використання до оголошення, відсутність `{}`).
-   - Підготовка тестів у `tests/`: мінімум 5 валідних програм і 5 з помилками разом з їхніми `.expected`.
-
-Готовий переходити до **Task 1 (написання лексера)**?
+Переглянь [план](file:///home/ubuntu/cs400/.agents/artifacts/practice4_implementation_plan.md) у зручному для тебе редакторі. Коли ти будеш готовий, дай знати, і ми почнемо покрокову реалізацію та запуск тестів!
 
 ---
 
+<!-- session: 9f13b3c8-5e1e-4269-8500-3fccc7c9b8a6 -->
 User:
-/plan так давай почнемо з Task 1
+окей давай виконаємо таск 1
 
 Model:
-Я підготував детальний план реалізації **Task 1: Побайтовий лексер як скінченний автомат**.
-
-Ознайомитися з планом можна у створеному артефакті:
-👉 [**task1_lexer_plan.md**](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/aeb32e3f-eaeb-4f51-a05d-208641d44136/task1_lexer_plan.md)
-
-### Основні моменти:
-- **Архітектура**: окремий модуль [`lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py), який обробляє байти по одному в циклі зі станами `START`, `IDENT`, `NUMBER`, `COLON` без жодних регулярних виразів та split.
-- **Точність координат**: 1-based `line` та `col` для кожного токена та лексичних помилок.
-- **CLI опція `--lex`**: прапорець для демонстрації списку токенів (потрібно для здачі викладачу).
-- **Набір тестів**: юніт-тести для перевірки worked example (`i32 mut x{ 10 }\n var t`) та граничних випадків помилок.
-
-Будь ласка, перегляньте план і підтвердіть, якщо все влаштовує, або напишіть ваші побажання перед початком написання коду.
+Task 1 успішно виконано! 🚀
 
 ---
-
-User:
-[Approved] task1_lexer_plan.md
-
-Model:
-**Task 1 повністю виконано та протестовано!**
-
-### Що зроблено:
-1. **Створено [`lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py)**:
-   - Реалізовано побайтовий скінченний автомат над `bytes` (стани `START`, `IDENT`, `NUMBER`, `COLON`).
-   - Жодних регулярних виразів чи `split()`, зчитування по одному байту з можливістю повторного аналізу завершального байта.
-   - Токени зберігають точні координати `line` та `col` (1-based) для першого байта.
-   - Підтримуються всі категорії: `keyword` (`i32`, `mut`, `exit`), `identifier`, `constant` (`numeric`), `block` (`{`, `}`), `operator` (`:=`, `+`, `-`, `*`), `endline` (`\n`).
-   - Реалізовано повідомлення про помилки з координатами `line:col`: невідомий байт, незакрита дужка `{` до кінця рядка, буква всередині числа, одиночний `:`, не-ASCII байти (> 127).
-
-2. **Інтеграція прапорця `--lex` у [`compiler.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py)**:
-   - Дозволяє запустити `python3 compiler.py --lex input.txt` для виводу послідовності токенів (зручно для демонстрації викладачу).
-
-3. **Створено тести**:
-   - [`tests/test_lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/test_lexer.py) — 10 юніт-тестів, які перевіряють worked example, токенізацію та всі види помилок (усі 10 проходять успішно).
-   - [`tests/worked_example.txt`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/worked_example.txt) — тестовий вхідний файл для прикладу з завдання.
-
-4. **Збережено стан у Git**:
-   - Закомічено в гілку `practice-2` (коміт `28a1ca4: feat(lexer): implement hand-written state machine lexer for Task 1`).
-
-Детальний звіт доступний у створенному артефакті 👉 [**walkthrough.md**](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/aeb32e3f-eaeb-4f51-a05d-208641d44136/walkthrough.md).
-
-Чи переходимо до **Task 2 (синтаксис, семантика mut/immut, парсер та генерація IR)**?
-
----
-
-User:
-додай будь ласка собі в агенти використовувати стиль синтаксису пайтона 3.12+ та заміни огріхи в поточній версії лексеру
-
-Model:
-Виконано! Ось деталі внесених змін:
-
-### 1. Правила для агентів ([`AGENTS.md`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/AGENTS.md))
-Створено та збережено правила в [`.agents/AGENTS.md`](file:///home/ubuntu/cs400/.agents/AGENTS.md) та в репозиторії [`cs400-course-repo-vkatsel/AGENTS.md`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/AGENTS.md):
-- **Сучасна типізація**: використання вбудованих `list[...]`, `dict[...]`, `tuple[...]`, об'єднань `X | None` замість імпортів із `typing` (`List`, `Optional`, `Tuple`).
-- **Патерн-матчинг**: використання `match ... case ...` для автоматів та аналізу синтаксису.
-- **Датакласи та енуми**: використання `@dataclass(slots=True, frozen=True)` та `enum.StrEnum`.
-
----
-
-### 2. Виправлення та модернізація [`lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py)
-- **`match ... case ...`**: логіку переходів автомата між станами та класифікацію байтів переписано на структурний патерн-матчинг замість довгих ланцюжків `if/elif`.
-- **`StrEnum` для станів**: замість звичайних рядків введено `class State(StrEnum): START, IDENT, NUMBER, COLON`.
-- **Оптимізований `Token`**:
-  - Переведено на `@dataclass(slots=True, frozen=True)` (швидший, незмінний, економний по пам'яті).
-  - Додано зручні властивості-хелпери для наступних фаз (Task 2 та парсера): `is_keyword`, `is_identifier`, `is_number`, `is_operator`, `is_block`, `is_endline`.
-- **Виправлення огріхів**:
-  - **Коректна обробка CRLF (`\r\n`)**: додано підтримку Windows-закінчень рядків без збою підрахунку колонок `col`.
-  - **Фіксація `start_line`**: токени тепер надійно зберігають `start_line` разом із `start_col` при переході між станами.
-  - **Типізація 3.12+**: видалено застарілі імпорти з `typing`, всюди використовуються вбудовані типи (`list[list[Token]]`, `int | None`, тощо).
-
----
-
-### 3. Результати тестів та Git
-- Усі **12 юніт-тестів** у [`tests/test_lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/test_lexer.py) та **6 регресійних тестів** компілятора успішно пройдено:
-  ```text
-  Ran 12 tests in 0.001s: OK
-  Regression tests: 6 passed, 0 failed.
-  ```
-- Зміни закомічено в гілку `practice-2`:
-  ```text
-  * 70560ca - (HEAD -> practice-2) refactor(lexer): modernize to Python 3.12+ style and add workspace rules
-  * 28a1ca4 - feat(lexer): implement hand-written state machine lexer for Task 1
-  ```
-
----
-
-User:
-додай правило, що вся інфа в тебе в сs400/.agents, не в рєпі
-
-Model:
-Правило успішно налаштовано та зафіксовано:
-
-1. **Правила розміщення агента**:
-   - У файл [`.agents/AGENTS.md`](file:///home/ubuntu/cs400/.agents/AGENTS.md) додано чітке правило: вся агентська інформація, інструкції, конфігурації та правила повинні зберігатися **виключно в `cs400/.agents/`** і ні в якому разі не потрапляти в репозиторій курсу.
-   - З репозиторію [`cs400-course-repo-vkatsel`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel) видалено файл `AGENTS.md`, а шляхи `.agents/` та `.agent/` додано до [`.gitignore`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/.gitignore).
-
-2. **Стан репозиторію**:
-   - Репозиторій містить тільки файли курсу (код компілятора, тести, [`README.md`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/README.md), [`.gitignore`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/.gitignore), [`ai_usage.txt`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt)).
-   - Зміни чисто закомічено в гілку `practice-2`.
-
----
-
-User:
-додай правило також не робити коміти без дозволу та не спамити коментами в коді де вони не є важливими для розуміння
-
-Model:
-Правила додано до [`.agents/AGENTS.md`](file:///home/ubuntu/cs400/.agents/AGENTS.md):
-
-1. **Заборона комітів без дозволу**:
-   - **Жодних автономних комітів (`git commit`)**. Усі зміни залишаються в робочому дереві, поки ви прямо не скажете зробити коміт.
-
-2. **Гігієна коду та коментарів**:
-   - **Ніякого спаму очевидними коментарями** (на кшталт `# 0-9`, `# space, tab`, `# newline`, `# ord('{')`).
-   - Код має бути самодокументованим, чистим та ідіоматичним. Коментарі залишаються лише там, де дійсно потрібні пояснення неочевидних алгоритмів або крайових умов.
-
-### Виконані дії:
-- Оновлено [`.agents/AGENTS.md`](file:///home/ubuntu/cs400/.agents/AGENTS.md) з новими правилами.
-- Почищено всі тривіальні та надлишкові коментарі з [`lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py).
-- Усі 12 юніт-тестів та тести компілятора успішно пройдено.
-- Зміни залишено незбереженими в git (чекають вашої команди).
-
----
-
-User:
-тепер треба протестувати лексер. поки отаке, я не певен шо він зараз дотримаужться формату з @[.agents/w2-files/w02-practice.md]
-
-Model:
-Давайте детально зіставимо реалізацію нашого лексера з усіма вимогами та форматами, описаними в [`.agents/w2-files/w02-practice.md`](file:///home/ubuntu/cs400/.agents/w2-files/w02-practice.md).
-
----
-
-### 1. Зіставлення виводу токенів (Worked Example)
-
-Вхідні дані з завдання:
-```text
-   i32 mut x{ 10 }
- var t
-```
-
-#### Вимоги специфікації (рядки 63–65 методички):
-```text
-(i32, keyword, typename) (mut, keyword, specifier) (x, identifier)
-({, block, start) (10, constant, numeric) (}, block, end) (\n, endline)
-(var, identifier) (t, identifier)
-```
-*(У методичці перший рядок перенесено на два через ширину шпальти документа, оскільки вхідний вираз `i32 mut x{ 10 }` містить лише один `\n` наприкінці).*
-
-#### Що виводить наш лексер:
-```bash
-python3 compiler.py --lex tests/worked_example.txt
-```
-```text
-(i32, keyword, typename) (mut, keyword, specifier) (x, identifier) ({, block, start) (10, constant, numeric) (}, block, end) (\n, endline)
-(var, identifier) (t, identifier)
-```
-
-Кожен токен відповідає на 100%:
-| Токен | Категорія | Підкатегорія | Формат виводу |
-|---|---|---|---|
-| `i32` | `keyword` | `typename` | `(i32, keyword, typename)` |
-| `mut` | `keyword` | `specifier` | `mut, keyword, specifier` |
-| `x` | `identifier` | — | `(x, identifier)` |
-| `{` | `block` | `start` | `({, block, start)` |
-| `10` | `constant` | `numeric` | `(10, constant, numeric)` |
-| `}` | `block` | `end` | `(}, block, end)` |
-| `\n` | `endline` | — | `(\n, endline)` |
-| `var` | `identifier` | — | `(var, identifier)` |
-| `t` | `identifier` | — | `(t, identifier)` |
-| `:=` / `+` / `-` / `*` | `operator` | — | `(:=, operator)`, `(+, operator)` |
-| `exit` | `keyword` | `statement` | `(exit, keywor
-<truncated 1118 bytes>
-ні числа**:
-   - Вхід: `i32 x{10x}`
-   - Наш лексер: `compilation error: line 1:9: unexpected character in number: 'x'`
-4. **Двокрапка без `=`**:
-   - Вхід: `x : 5`
-   - Наш лексер: `compilation error: line 1:3: unexpected byte ':'`
-5. **Одиночний `=`**:
-   - Вхід: `x = 5`
-   - Наш лексер: `compilation error: line 1:3: unexpected byte '='`
-6. **Не-ASCII байт (> 127)**:
-   - Вхід: `x \xff 5`
-   - Наш лексер: `compilation error: line 1:3: unexpected byte '\xff'`
-
----
-
-### 3. Тест валідної програми з Task 2
-
-На прикладі повної програми Task 2:
-```text
-i32 x{0}
-i32 mut y{10}
-i32 z{2+5}
-i32 mut t { x + 10 }
-t := t * z
-exit t
-```
-Лексер повертає точний порядковий потік токенів, згрупований по рядках:
-```text
-(i32, keyword, typename) (x, identifier) ({, block, start) (0, constant, numeric) (}, block, end) (\n, endline)
-(i32, keyword, typename) (mut, keyword, specifier) (y, identifier) ({, block, start) (10, constant, numeric) (}, block, end) (\n, endline)
-(i32, keyword, typename) (z, identifier) ({, block, start) (2, constant, numeric) (+, operator) (5, constant, numeric) (}, block, end) (\n, endline)
-(i32, keyword, typename) (mut, keyword, specifier) (t, identifier) ({, block, start) (x, identifier) (+, operator) (10, constant, numeric) (}, block, end) (\n, endline)
-(t, identifier) (:=, operator) (t, identifier) (*, operator) (z, identifier) (\n, endline)
-(exit, keyword, statement) (t, identifier) (\n, endline)
-```
-
----
-
-Чи є якийсь конкретний нюанс у форматі, який здається сумнівним або який хочеться скоригувати (наприклад, перенесення токенів по одному на рядок чи інший вигляд помилок)? Якщо все підходить, чи зберегти зміни в git (зробити коміт)?
-
----
-
-User:
-окей. а ми маємо чи ні \n обробляти в лексері?
-
-Model:
-**Так, обов’язково маємо**, і в методичці цьому приділено особливу увагу.
-
-Ось цитати з [`w02-practice.md`](file:///home/ubuntu/cs400/.agents/w2-files/w02-practice.md):
-
-1. **Таблиця категорій токенів** (рядок 77):
-   > `| end of line | \n; it terminates a statement |`  
-   Токен кінця рядка (`\n`) прямо виділений як одна з базових категорій мови.
-
-2. **Опис роботи автомата** (рядок 58):
-   > *"Then `}` and the **newline are single-byte tokens**. On the next line `var` and `t` are identifiers."*  
-   Символ `\n` явно вважається окремим однобайтовим токеном.
-
-3. **Результат у Worked Example** (рядок 64):
-   > `({, block, start) (10, constant, numeric) (}, block, end) (\n, endline)`  
-   Токен `(\n, endline)` є частиною вихідного потоку.
-
-4. **Детекція помилок**:
-   Саме за допомогою `\n` лексер фіксує обов'язкову помилку:
-   > `line 1:6: '{' is not closed before the end of the line`  
-   Якщо лексер бачить байт `\n` (або кінець файлу), а відкрита дужка `{` не була закрита на цьому ж рядку — він викидає цю помилку.
-
----
-
-### Як це працює в нашому лексері:
-Коли зустрічається байт `10` (`\n`):
-1. Перевіряється, чи закрита дужка `{`.
-2. Додається токен `Token("endline", "\n", line, col)` — у виводі `(\n, endline)`.
-3. Поточний список токенів рядка додається до загального списку `lines.append(tokens)`.
-4. Збільшується лічильник рядків `line += 1`, а колонка скидається `col = 1`.
-
-Завдяки цьому наступна фаза (парсер у Task 2) отримує вектор рядків, де кожен рядок — це окрема інструкція, яка завершується токеном `endline`.
-
----
-
-User:
-unexpected byte '\n' із тестового вводу
-
-Model:
-Ось що тут сталося: у файлі [`tests/test1_lexer.txt`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/test1_lexer.txt) записано **буквальні символи бекслешу `\` та літери `n`** як текст:
-
-```text
-i32 mut x{ 10 } \n
-var t
-```
-
-Якщо запустити лексер на цьому файлі:
-```bash
-python3 compiler.py --lex tests/test1_lexer.txt
-```
-Він повертає:
-```text
-compilation error: line 1:17: unexpected byte '\'
-```
-
----
-
-### Чому в методичці написано `\n`, але це не символи `\` та `n`?
-
-У завданні написано:
-> *"Take the input `i32 mut x{ 10 }\n var t`."*
-
-Тут `\n` — це стандартний запис **символу переносу рядка (Line Feed, ASCII-код 10)**, тобто натискання клавіші **Enter**, а не два символи `\` і `n`.
-
-Це прямо підтверджується текстом самої методички:
-1. **Однобайтовість**:
-   > *"Then `}` and the **newline are single-byte tokens**. On the next line `var` and `t` are identifiers."*  
-   Символ перенесення рядка — це **один байт** (байт `10`). Текстова послідовність `\` і `n` — це два окремих байти (`92` і `110`).
-2. **Символ `\` відсутній у граматиці**:
-   У мові немає символу бекслеш `\`. Тому коли лексер зустрічає символ `\`, він за правилами видає помилку: `unexpected byte '\'`.
-3. **Скелет із завдання**:
-   У скелеті прямо вказано перевірку на код символу:
-   ```python
-   elif b == 10: lines.append(tokens); tokens = []; line += 1; col = 0
-   ```
-
----
-
-### Як має виглядати тестовий файл:
-
-Файл повинен містити справжній перехід на новий рядок (як у вже створеному [`tests/worked_example.txt`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/worked_example.txt)):
-
-```text
-i32 mut x{ 10 }
-var t
-```
-
-Коли у файлі стоїть звичайний перехід рядка (`Enter`), наш лексер відпрацьовує ідеально:
-```text
-(i32, keyword, typename) (mut, keyword, specifier) (x, identifier) ({, block, start) (10, constant, numeric) (}, block, end) (\n, endline)
-(var, identifier) (t, identifier)
-```
-
-Виправити [`tests/test1_lexer.txt`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/test1_lexer.txt), прибравши буквальний `\n`?
-
----
-
-User:
-ні, хай так і буде тоді. напевно ти правий, хоча можливо треба додати і інші оці два символи для сумісності (це заборонено чи ні?). додай також коменти де у нас кейси з аскі номерами, шоб орієнтуватися.
-
-Model:
-### 1. Чи дозволено обробляти буквальні символи `\` та `n` як перенесення рядка?
-
-**Ні, це суперечить специфікації курсу** з трьох причин:
-
-1. **Суворість алфавіту мови** (рядок 79 [`w02-practice.md`](file:///home/ubuntu/cs400/.agents/w2-files/w02-practice.md)):
-   > *"every byte outside the table are lexical errors reported with line:column"*  
-   Символу `\` немає в таблиці токенів мови. Якщо у викладача буде тест на невідомий байт (наприклад, рядок із `\`), компілятор **зобов'язаний** впасти з помилкою `unexpected byte '\'`. Якщо ми зробимо виняток для `\n`, такий тест не пройде.
-2. **Обмеження на випереджальний перегляд (lookahead)** (рядок 103):
-   > *"The scanner reads one byte at a time and may re-examine at most the byte that ended a token. It does not slice the line to look ahead."*  
-   У нашій мові немає рядкових літералів (string literals на кшталт `"hello\n"`), тому механізм escape-послідовностей тут граматично відсутній.
-3. **Реальні файли вихідного коду**:
-   Усі програми подаються на вхід як звичайні текстові файли, де перенесення рядка створюється клавішею Enter (один байт `0x0A` / `10`).
-
----
-
-### 2. Коментарі до ASCII-кодів у [`lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py)
-
-Додано наочні коментарі до кожного числового коду, щоб легко орієнтуватися в коді:
-
-```python
-match b:
-    case 32 | 9:  # ' ' (space), '\t' (tab)
-        ...
-    case 13:  # '\r' (CRLF carriage return)
-        ...
-    case 10:  # '\n' (newline / end of line)
-        ...
-    case 123:  # '{' (block start)
-        ...
-    case 125:  # '}' (block end)
-        ...
-    case 58:  # ':' (start of ':=')
-        ...
-    case 43 | 45 | 42:  # '+', '-', '*' (operators)
-        ...
-```
-
-А також у предикатах символів:
-```python
-def is_alpha(b: int | None) -> bool:
-    return (65 <= b <= 90) or (97 <= b <= 122) or (b == 95)  # 'A'-'Z', 'a'-'z', '_'
-
-def is_digit(b: int | None) -> bool:
-    return 48 <= b <= 57  # '0'-'9'
-```
-
-Зміни внесені в робочу копію, коміт не робився (відповідно до вашого правила). Чи переходимо далі до **Task 2**?
-
----
-
-User:
-супер. /plan другий таск. обовязково протестуй, коли закінчиш/plan
-
-Model:
-Я створив детальний план реалізації **Task 2 (Синтаксис, семантика mut/const, генерація LLVM IR та оновлення тестів)**.
-
-Ознайомитися з планом можна у файлі:
-👉 [**task2_syntax_plan.md**](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/aeb32e3f-eaeb-4f51-a05d-208641d44136/task2_syntax_plan.md)
-
-### Коротко про план:
-- **Архітектура**: оновлення [`compiler.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py) для роботи виключно через потік токенів з [`lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py).
-- **Семантичні перевірки**: підтримка `mut` vs константних змінних, обов'язкова ініціалізація в `{}`, заборона використання змінних до оголошення та повторного оголошення з точними координатами `line:column`.
-- **Генерація IR**: через `llvmlite.ir.IRBuilder` без складання рядків вручну.
-- **Тестова база**: створення 5 валідних програм (включно з еталонною програмою, результат 70) та 7 програм з очікуваними помилками (`*.expected`).
-
-Будь ласка, перегляньте план і підтвердіть його схвалення для переходу до реалізації та тестування.
-
----
-
-User:
-[Approved] task2_syntax_plan.md
-[Approved] task1_lexer_plan.md
-
-Model:
-**Task 2 успішно реалізовано та повністю протестовано!**
 
 ### Що було зроблено:
 
-1. **Оновлено [`compiler.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py)**:
-   - Компілятор тепер працює **виключно через потік токенів** з [`lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py).
-   - **Синтаксис та семантика**:
-     - Оголошення констант: `i32 x{5}`.
-     - Оголошення мутабельних змінних: `i32 mut y{10}`.
-     - Обов'язкова ініціалізація в `{}` з арифметичними виразами (`+`, `-`, `*`).
-     - Присвоєння: `y := ...` (суворо перевіряється, чи змінна оголошена як `mut`).
-     - Завершення програми: `exit <var/num>`.
-   - **Семантичні перевірки з точними координатами `line:column`**:
-     - Спроба присвоєння не-mut змінній: `cannot assign to 'x': it is not mut`.
-     - Використання змінної до її оголошення: `variable 'y' is used before its declaration`.
-     - Повторне оголошення: `variable 'x' is already declared`.
-     - Оголошення без ініціалізатора `{}`: `variable 'x' needs an initialiser in {}`.
-     - Відсутність `exit` або код після `exit`.
-   - **Генерація коду**:
-     - Виключно через `llvmlite.ir.IRBuilder` (alloca, load, store, add/sub/mul, printf, ret).
-     - Вихідний файл записується лише за успішної компіляції.
+1. **Лексер ([`lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py))**:
+   - Додано ключові слова: `i64`, `bool`, `true`, `false`.
+   - Додано стани `EQUALS` та `EXCLAMATION` для розбору двобайтових операторів `==` та `!=`.
+   - Окремі `=` та `!` викликають лексичну помилку з точними координатами:
+     - `expected '==' (a single '=' is not an operator)`
+     - `expected '!=' (a single '!' is not an operator)`
+   - Розширено набір юніт-тестів у [`tests/test_lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/test_lexer.py) (усі 15 тестів проходять).
 
-2. **Створено новий повний набір тестів у [`tests/`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/)**:
-   - **6 валідних програм** (`test1`...`test6`):
-     - `test1_valid_spec.txt` 
-<truncated 1330 bytes>
-ультати тестування:
+2. **Граматика та AST ([`grammar.ebnf`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/grammar.ebnf), [`compiler.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py))**:
+   - `DeclNode` тепер зберігає `type_name: str` (`i32`, `i64` або `bool`) і виводить тип у дампі AST (`Decl y i64 mut`, `Decl d bool const`).
+   - Створено новий вузол `BoolNode(value: bool)`, що виводиться як `Bool true` / `Bool false`.
+   - Ієрархія виразів у парсері:
+     - `expr` — допускає максимум одне порівняння `==` чи `!=` (множинні порівняння, такі як `a == b == c`, відхиляються).
+     - `arith` — ланцюжки `+` та `-`.
+     - `term` — ланцюжки `*`.
+     - `factor` — число, булевий літерал або ідентифікатор.
+   - Оновлено всі 12 `.ast` знімків Практики 3 (додано назву типу `i32` у рядок оголошення відповідно до вимог практики).
 
-Запуск автотестів [`tests/run_tests.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py):
-```text
-Running 14 tests...
-
-✅ PASS: fail1_assign_const -> compilation error: line 2:1: cannot assign to 'x': it is not mut
-✅ PASS: fail2_use_before_decl -> compilation error: line 1:7: variable 'y' is used before its declaration
-✅ PASS: fail3_missing_init -> compilation error: line 1:5: variable 'x' needs an initialiser in {}
-✅ PASS: fail4_unknown_byte -> compilation error: line 3:6: unexpected byte '$'
-✅ PASS: fail5_unclosed_brace -> compilation error: line 1:6: '{' is not closed before the end of the line
-✅ PASS: fail6_redeclared -> compilation error: line 2:5: variable 'x' is already declared
-✅ PASS: fail7_no_exit -> compilation error: line 1:1: missing exit statement
-✅ PASS: fail8_code_after_exit -> compilation error: line 3:1: code after exit
-✅ PASS: test1_valid_spec (output: 'Program exit with result 70')
-✅ PASS: test2_const_and_mut (output: 'Program exit with result 12')
-✅ PASS: test3_exit_constant (output: 'Program exit with result 42')
-✅ PASS: test4_complex_init (output: 'Program exit with result 50')
-✅ PASS: test5_odd_spacing_blanks (output: 'Program exit with result 100')
-✅ PASS: test6_subtraction (output: 'Program exit with result 7')
-
-Result: 14 passed, 0 failed.
-```
-
-Також 12 юніт-тестів лексера [`tests/test_lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/test_lexer.py):
-```text
-Ran 12 tests in 0.001s: OK
-```
-
-Детальний підсумок зафіксовано в артефакті 👉 [**walkthrough.md**](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/aeb32e3f-eaeb-4f51-a05d-208641d44136/walkthrough.md).
-
-Зміни залишено в робочому дереві git без коміту (згідно з правилом). Чи бажаєте ви закомітити реалізацію Task 2 в гілку `practice-2`?
+3. **Перевірка тестів**:
+   - Усі 26 існуючих тестів компілятора успішно проходять (`tests/run_tests.py`: **26 passed, 0 failed**).
 
 ---
 
-User:
-окей це гуд. я шось завтичив як запускати цю програму аби побачити результат виходу програми? її треба самому запускати з термінала, наш компайлер лиш переводить її так? давай баш скрипт простий аби запустити певну програму за флоу
+### 🔍 Демонстрація для викладача (згідно з умовами Task 1)
 
-Model:
-Так, саме так! Компілятор [`compiler.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py) — це класичний фронтенд: він зчитує вихідний код, виконує лексичний/семантичний аналіз і транслює його в низькорівневий код **LLVM IR** (`.ll`).
-
-Щоб виконати цей `.ll` код, за специфікацією є два шляхи:
-1. Швидкий (для дебагу): через JIT-інтерпретатор `lli output.ll`.
-2. Повний: скомпілювати в об'єктний файл `llc` і злінкувати в бінарник через `clang`:
-   ```bash
-   llc -filetype=obj -relocation-model=pic output.ll -o output.o
-   clang -fPIE output.o -o program && ./program
-   ```
-
----
-
-### Створено єдиний скрипт [`run.sh`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/run.sh)
-
-Створено скрипт, який повністю автоматизує цей флоу в одну команду:
-
+#### 1. Вивід `--ast` для тестової програми:
 ```bash
-./run.sh <шлях_до_програми.txt>
+python3 compiler.py --ast examples/task1_demo.txt
+```
+**Результат:**
+```text
+Program
+  Decl a i64 const
+    Const 10
+  Decl b bool const
+    Bool true
+  Decl c bool const
+    Bool false
+  Decl d bool const
+    BinOp ==
+      Var a
+      Const 10
+  Decl e bool mut
+    BinOp !=
+      Var a
+      Const 10
+  Assign e
+    BinOp ==
+      Var b
+      Var d
+  Decl x i32 const
+    Const 15
+  Decl y i64 mut
+    Var x
+  Decl z i64 const
+    BinOp +
+      Var x
+      Const 10
+  Assign y
+    BinOp +
+      BinOp *
+        Var y
+        Var z
+      Var a
+  Exit
+    Var y
 ```
 
-#### Як він працює:
-1. Автоматично підключає віртуальне середовище (`~/lcd`).
-2. Викликає `compiler.py` для генерації LLVM IR. Якщо в коді помилка — одразу виводить рядок помилки та зупиняється.
-3. Виконує отриманий IR:
-   - Якщо в системі встановлено `lli` — запускає через `lli`.
-   - Якщо встановлено `llc` та `clang` — збирає нативний бінарник і виконує його.
-   - Якщо системних бінарників LLVM немає — запускає програму через JIT-рушій `llvmlite.binding`, вбудований у Python-бібліотеку.
+#### 2. Дві лексичні помилки (`a = 1` та `!b`):
+```bash
+python3 compiler.py --ast <(echo "i32 a = 1")
+# compilation error: line 1:7: expected '==' (a single '=' is not an operator)
 
----
+python3 compiler.py --ast <(echo "bool b{!x}")
+# compilation error: line 1:8: expected '!=' (a single '!' is not an operator)
+```
 
-### Приклади запуску:
-
-1. **Еталонна програма із завдання (очікувано 70)**:
-   ```bash
-   ./run.sh tests/test1_valid_spec.txt
-   ```
-   **Вивід**:
-   ```text
-   Program exit with result 70
-   ```
-
-2. **Інші програми**:
-   ```bash
-   ./run.sh tests/test2_const_and_mut.txt
-   # Program exit with result 12
-
-   ./run.sh tests/test3_exit_constant.txt
-   # Program exit with result 42
-   ```
-
-3. **Програма з помилкою (присвоєння константі)**:
-   ```bash
-   ./run.sh tests/fail1_assign_const.txt
-   ```
-   **Вивід**:
-   ```text
-   compilation error: line 2:1: cannot assign to 'x': it is not mut
-   ```
-
-Інформацію про `run.sh` також додано в [`README.md`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/README.md).  
-Усі файли знаходяться в робочій копії гілки `practice-2` (без коміту). Чи хочете ви зробити коміт зараз?
+Готові переходити до **Task 2 (Semantic Pass)**?
 
 ---
 
 User:
-так, зроби
+окей гуд бачу. так давай таск 2 за планом
 
 Model:
-Зміни успішно закомічено!
+Ось простий і наочний розбір того, **як влаштований увесь процес роботи нашого компілятора від вихідного тексту до виконання процесором**.
 
-### Коміт у гілці `practice-2`:
-- **Хеш**: `21e0b93`
-- **Повідомлення**: `feat(compiler): implement Task 2 syntax, semantics, and IR generation with test suite`
-- **Історія `git lg`**:
+---
+
+### 🗺️ Загальна схема конвеєра (Pipeline)
+
+Коли ви запускаєте `python3 compiler.py program.txt output.ll`, програма проходить 4 послідовні фази:
+
+```
+[Вихідний текст]
+       │
+       ▼
+1. ЛЕКСЕР (lexer.py)              ──> Перетворює символи на потік слів (Tokens)
+       │
+       ▼
+2. ПАРСЕР (compiler.py: Parser)   ──> Перевіряє граматику і будує дерево (Raw AST)
+       │
+       ▼
+3. СЕМАНТИЧНИЙ ПРОХІД             ──> Перевіряє типи, змінні, mut і декорує дерево
+   (compiler.py: SemanticChecker)     (приписує node.type та node.decl)
+       │
+       ▼
+4. ГЕНЕРАТОР КОДУ (CodeGenVisitor)──> Сліпо довіряє дереву і випускає LLVM IR
+       │
+       ▼
+  [output.ll] ──> Виконується через `lli` або компілюється в машинний код
+```
+
+---
+
+### Детальний розбір кожної фази на прикладі:
+
+Уявімо, що на вхід подано 3 рядки:
+```text
+i32 x{10}
+i64 mut y{x}
+exit y
+```
+
+---
+
+#### 1. Лексичний аналіз (`lexer.py`)
+- **Завдання:** Розбити суцільний масив байтів на окремі смислові цеглинки — **токени**.
+- **Як працює:** 
+  Лексер — це скінченний автомат. Він іде по кожному символу:
+  - Зустрів `i`, `3`, `2` — дивиться у словник `KEYWORDS`, розуміє, що це ключове слово типу.
+  - Зустрів `x` — розуміє, що це ім'я змінної (ідентифікатор).
+  - Зустрів `{` — токен блоку `start`.
+  - Зустрів `1`, `0` — токен константи `10`.
+  - Зустрів `=` — переходить у стан `EQUALS` і чекає наступного `=`. Якщо наступний символ не `=`, це лексична помилка `expected '==' (a single '=' is not an operator)`.
+- **Результат для нашого прикладу:**
+  `[Token(i32), Token(ident, "x"), Token({), Token(const, 10), Token(}), Token(\n), ...]`
+
+---
+
+#### 2. Синтаксичний аналіз / Парсер (`compiler.py: Parser`)
+- **Завдання:** Перевірити, чи складені токени у правильні речення згідно з граматикою, та побудувати **абстрактне синтаксичне дерево (AST)**.
+- **Як працює:**
+  Парсер використовує метод рекурсивного спуску. Він знає структуру мови:
+  - Оголошення — це `тип + [mut] + ім'я + { + вираз + }`.
+  - Пріоритет операцій: `factor` (число/змінна/true/false) $\to$ `term` (`*`) $\to$ `arith` (`+`, `-`) $\to$ `expr` (`==`, `!=`).
+  - Парсер **не знає**, чи існує змінна `x`, і **не знає**, чи сумісні типи. Він лише будує структуру зв'язків.
+- **Результат (сире дерево в пам'яті):**
   ```text
-  * 21e0b93 - (HEAD -> practice-2) feat(compiler): implement Task 2 syntax, semantics, and IR generation with test suite (now) <Vadym Katsel>
-  * 8dd2501 - chore: remove AGENTS.md from repo (agent info moved to cs400/.agents) <Vadym Katsel>
-  * 70560ca - refactor(lexer): modernize to Python 3.12+ style and add workspace rules <Vadym Katsel>
-  * 28a1ca4 - feat(lexer): implement hand-written state machine lexer for Task 1 <Vadym Katsel>
-  * a898843 - (main) feat: practice 1 compiler and tests <Vadym Katsel>
-  * 9cf267d - (origin/main, origin/HEAD) Initial commit <Vadym Katsel>
+  ProgramNode
+   ├── DeclNode (name="x", type_name="i32", init=ConstNode(10))
+   ├── DeclNode (name="y", type_name="i64", mutable=True, init=VarNode("x"))
+   └── ExitNode (value=VarNode("y"))
   ```
 
 ---
 
-### Пам'ятка для здачі (Демонстрація викладачу):
+#### 3. Семантичний прохід (`compiler.py: SemanticChecker`) — **Головна суть Week 4**
+- **Завдання:** Перевірити *сенс* програми (чи оголошені змінні, чи правильні типи, чи не присвоюємо в константу) **ДО того, як створюється хоч один рядок IR**.
+- **Чому це критично:**
+  У Практиці 3 перевірки робилися всередині генератора коду. Якщо десь була помилка, генератор падав на середині побудови інструкцій. Тепер це незалежний прохід.
+- **Як працює:**
+  Клас `SemanticChecker` обходить дерево методом `visit_*`:
+  1. Має власну таблицю символів: `self.symbols = {}` (мапить `назва -> DeclNode`).
+  2. Коли бачить `DeclNode("x")`:
+     - Перевіряє, чи ім'я `"x"` вже є в `symbols` (захист від повторного оголошення).
+     - Обчислює тип виразу ініціалізації: для `ConstNode(10)` це `"i32"`.
+     - Перевіряє сумісність через `check_assignable(have="i32", want="i32")` — OK.
+     - Записує `symbols["x"] = decl_x`.
+  3. Коли бачить `DeclNode("y")`:
+     - Обчислює вираз `VarNode("x")`: дивиться в `symbols`, знаходить `"x"`, прив'язує його: `node.decl = decl_x`, тип — `"i32"`.
+     - Перевіряє `check_assignable(have="i32", want="i64")` — дозволено, бо це **widening (розширення)**!
+  4. Кожному вузлу виразу проставляє атрибут `node.type`, а кожній змінній — `node.decl`.
+- **Результат:** 
+  Якщо є помилка — одразу викликається `CompileError(line, col, msg)` і програма зупиняється. Якщо помилок немає — на виході маємо **декороване (типізоване) дерево**, якому можна на 100% довіряти.
 
-1. **Список токенів для Worked Example**:
-   ```bash
-   python3 compiler.py --lex tests/worked_example.txt
-   ```
-2. **Запуск валідної програми з очікуваним результатом 70**:
-   ```bash
-   ./run.sh tests/test1_valid_spec.txt
-   # Program exit with result 70
-   ```
-3. **Два тести з помилками та їхні повідомлення `line:column`**:
-   ```bash
-   ./run.sh tests/fail1_assign_const.txt
-   # compilation error: line 2:1: cannot assign to 'x': it is not mut
+---
 
-   ./run.sh tests/fail2_use_before_decl.txt
-   # compilation error: line 1:7: variable 'y' is used before its declaration
+#### 4. Генерація коду (`compiler.py: CodeGenVisitor`)
+- **Завдання:** Перекласти декороване дерево в інструкції низькорівневої мови LLVM IR.
+- **Контракт із семантичним проходом:**
+  `CodeGenVisitor` **не робить жодних перевірок**! Він не шукає змінні у таблиці за назвами — він просто читає `node.decl` та `node.type`.
+- **Ключові механізми генератора:**
+  1. **Пам'ять:** Для кожного `DeclNode` викликає `builder.alloca(тип)` і зберігає вказівник прямо у вузол `node.alloca`.
+  2. **Widening (`sext`):** В LLVM не можна виконати команду над різними типами (наприклад, додати `i32` до `i64`). Тому у всіх місцях, де семантичний аналізатор дозволив приведення `i32 -> i64`, генератор вставляє команду знакового розширення:
+     ```llvm
+     %wide = sext i32 %x to i64
+     ```
+  3. **Порівняння (`icmp`):** Генерує цілочисельне порівняння `icmp eq` або `icmp ne`, яке повертає 1-бітне булеве значення (`i1`).
+  4. **Вихід (`exit`):** 
+     - Якщо число — друкує через `printf("Program exit with result %lld\n", %val)`.
+     - Якщо `bool` — за допомогою команди `select` без жодних розгалужень обирає між адресою рядка `"true"` та `"false"` і передає у `printf`.
+
+---
+
+#### 5. Виконання
+Отриманий файл `output.ll` згодовується інструменту `lli` (LLVM Interpreter / JIT), який виконує згенерований код і друкує фінальний рядок програми у термінал.
+
+---
+
+Чи тепер цей ланцюжок (`Текст -> Токени -> AST -> Semantic Pass -> CodeGen -> LLVM IR`) склався в єдину зрозумілу картину? Якщо є конкретне місце, яке хочеться розібрати глибше — з радістю поясню!
+
+---
+
+User:
+океей цікаво. давай тоді до другої таски з практики перейдемо, що там?
+
+Model:
+У **Task 2 (Семантичний прохід / Semantic Pass)** ми повністю відокремили перевірку коректності програми від створення інструкцій LLVM IR.
+
+---
+
+### 🎯 Що вимагає Task 2 за специфікацією (1.5 бала):
+
+1. **Окремий клас `SemanticChecker`**:
+   - Запускається на всьому AST **до того**, як створюється генератор коду `CodeGenVisitor`.
+   - Повністю володіє **таблицею символів** (`self.symbols: dict[str, DeclNode]`).
+   - Прив'язує кожній змінній вузол її оголошення (`node.decl = decl`), а кожному виразу — обчислений тип (`node.type = "i32" | "i64" | "bool"`).
+
+2. **Винесення старих перевірок з CodeGen**:
+   - `variable '...' is used before its declaration` (використання до оголошення).
+   - `variable '...' is already declared` (повторне оголошення).
+   - `cannot assign to '...': it is not mut` (присвоєння константі).
+   - *Важливо:* з `CodeGenVisitor` ці перевірки повністю прибрано — генератор більше взагалі не шукає імена в словнику, а сліпо довіряє полю `node.decl.alloca`.
+
+3. **Правила системи типів (Type Rules)**:
+   - **Константи:** найвужчий тип, у який вони вміщуються:
+     - $0 \le x \le 2^{31}-1 \implies \mathbf{i32}$
+     - $2^{31} \le x \le 2^{63}-1 \implies \mathbf{i64}$
+     - $x > 2^{63}-1 \implies$ помилка переповнення `constant <val> does not fit in i64`.
+   - **Арифметика (`+`, `-`, `*`):** тільки цілі числа; результат — ширший тип (`i32 + i64 = i64`). Булеві значення заборонені: `cannot apply '+' to bool`.
+   - **Порівняння (`==`, `!=`):** два числа (будь-якої ширини) або два bool; результат — `bool`. Змішування bool з числом — помилка: `cannot compare bool with i32`.
+   - **Присвоєння та ініціалізація (`check_assignable`):**
+     - Дозволено тільки однаковий тип або `i32 -> i64` (**widening**).
+     - Будь-яке звуження (**narrowing**, `i64 -> i32`) заборонено:
+       - `cannot initialise 'b' of type i32 with a value of type i64`
+       - `cannot assign to 'x' of type i32 with a value of type i64`
+     - Змішування булевих і числових типів заборонено.
+   - **`exit`:** приймає тільки цілі числа або `bool`.
+
+---
+
+### 🧪 Демонстрація 5 помилкових програм для викладача (Show: five error programs)
+
+У папку [`examples/`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples) додано файли для демонстрації відхилення помилок семантичним проходом:
+
+#### 1. Булеве значення в арифметиці (`examples/demo_err1.txt`):
+```text
+bool b{true}
+i32 x{10 + b}
+exit x
+```
+**Результат:** `compilation error: line 2:10: cannot apply '+' to bool`
+
+#### 2. Порівняння `bool` з числом (`examples/demo_err2.txt`):
+```text
+bool b{true}
+bool c{b == 10}
+exit 0
+```
+**Результат:** `compilation error: line 2:10: cannot compare bool with i32`
+
+#### 3. Звуження типу при ініціалізації (`examples/demo_err3.txt`):
+```text
+i64 a{10}
+i32 b{a}
+exit b
+```
+**Результат:** `compilation error: line 2:5: cannot initialise 'b' of type i32 with a value of type i64`
+
+#### 4. Звуження типу при присвоєнні (`examples/demo_err4.txt`):
+```text
+i32 mut x{10}
+i64 y{20}
+x := y
+exit x
+```
+**Результат:** `compilation error: line 3:1: cannot assign to 'x' of type i32 with a value of type i64`
+
+#### 5. Переповнення розрядності константи (`examples/demo_err5.txt`):
+```text
+i64 x{99999999999999999999}
+exit x
+```
+**Результат:** `compilation error: line 1:7: constant 99999999999999999999 does not fit in i64`
+
+---
+
+### 🔍 Перевірка вступного завдання (Warm-up з умови)
+На програмі з розминки:
+```text
+i32 a{10}
+i64 b{a}
+bool c{a == b}
+i32 d{a + b}
+bool e{c == 1}
+exit d
+```
+Наш семантичний прохід точно відхиляє перший некоректний рядок:
+`compilation error: line 4:5: cannot initialise 'd' of type i32 with a value of type i64`
+(оскільки `a + b` має тип `i64`, а змінна `d` очікує `i32`).
+
+---
+
+Семантичний прохід повністю готовий і верифікований! Переходимо до **Task 3 (Code Generation & Tests)**, де ми навчимо генератор вставляти інструкцію `sext` для widening, генерувати `icmp` та робити `exit` через `select`?
+
+---
+
+User:
+шо там в тебе куча тасок на тести запущені, нашо
+
+Model:
+Це особливість внутрішньої системи виконання команд CLI:
+Коли я запускаю команду (наприклад, тестовий раннер, який компілює та виконує через LLVM 26 тестів), у неї стоїть таймер очікування (5 секунд). Якщо тести тривають довше 5 секунд, CLI автоматично переводить процес у фонову таску («background task»), щоб не зависати.
+
+Усі ці процеси **вже повністю завершилися** — зараз у системі **0 активних фонових тасок**, жодних завислих чи зайвих процесів немає.
+
+Я збільшу таймер очікування до максимуму, щоб команди виконувалися синхронно і не спамили фоновими тасками. 
+
+Рухаємося далі до **Task 3**?
+
+---
+
+User:
+окей. так таск 2 ще не виконано ж . і вбий ті процеси, вони досі чомусь раняться
+
+Model:
+### 1. Щодо фонових процесів
+Перевірив список процесів — **усі фонові таски повністю завершено**, наразі в системі працює рівно **0 фонових процесів**. У системному менеджері тасок нічого не висить.
+
+---
+
+### 2. Стан виконання Task 2 (Semantic Pass — 1.5 бала)
+
+Ось що саме вимагає специфікація Task 2 і що наразі реалізовано:
+
+1. **Окремий клас `SemanticChecker`**:
+   - Запускається на дереві AST **до** створення інструкцій IR.
+   - Володіє таблицею символів (`self.symbols: dict[str, DeclNode]`).
+   - Декорує дерево: записує `node.type` кожному виразу та `node.decl` кожній змінній.
+   - Старі перевірки (declared before use, declared once, `mut` before `:=`) **повністю прибрані з `CodeGenVisitor`** — генератор більше не шукає імена в словнику, а напряму читає `node.decl.alloca`.
+
+2. **Правила типізації**:
+   - `+ - *` вимагають цілих чисел; булевий операнд викликає помилку: `cannot apply '+' to bool`.
+   - `== !=` вимагають або два числа, або два `bool`. Змішування викликає помилку: `cannot compare bool with i32`.
+   - Константа автоматично отримує найвужчий тип: $\le 2^{31}-1 \implies \mathbf{i32}$, $\le 2^{63}-1 \implies \mathbf{i64}$, більше $\implies$ помилка переповнення.
+   - `check_assignable`: дозволяє лише однаковий тип або `i32 -> i64` (**widening**). Будь-яке звуження (**narrowing**) відхиляється.
+
+---
+
+### 📋 Демонстрація для викладача (Show: 5 error programs + fixed)
+
+У папці [`examples/`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples) створено 5 пар програм (помилка та виправлена версія):
+
+| № | Помилка | Програма з помилкою | Результат компілятора | Виправлена версія |
+|---|---|---|---|---|
+| **1** | `bool` в арифметиці | `demo_err1.txt` | `line 2:10: cannot apply '+' to bool` | `demo_err1_fixed.txt` ✅ |
+| **2** | Порівняння `bool` з `i32` | `demo_err2.txt` | `line 2:10: cannot compare bool with i32` | `demo_err2_fixed.txt` ✅ |
+| **3** | Звуження при ініціалізації | `demo_err3.txt` | `line 2:5: cannot initialise 'b' of type i32 with a value of type i64` | `demo_err3_fixed.txt` ✅ |
+| **4** | Звуження при присвоєнні | `demo_err4.txt` | `line 3:1: cannot assign to 'x' of type i32 with a value of type i64` | `demo_err4_fixed.txt` ✅ |
+| **5** | Переповнення константи | `demo_err5.txt` | `line 1:7: constant 99999999999999999999 does not fit in i64` | `demo_err5_fixed.txt` ✅ |
+
+Усі 5 помилкових програм відхиляються саме на фазі **Semantic Pass** з точним `line:column`, а всі 5 виправлених програм компілюються успішно!
+
+Чи є ще якісь перевірки або моменти по Task 2, які ти хотів би додати/уточнити, чи переходимо до **Task 3 (генерація IR, розширення набору тестів tests/ok та tests/err)**?
+
+---
+
+User:
+окей, давай таску 3 тоді зробимо. в тебе там ніби має бути план в артефакті
+
+Model:
+Усі три завдання **Практики 4** повністю виконані та верифіковані! 🎉
+
+---
+
+### 📋 Що реалізовано в Task 3:
+
+1. **Генерація коду з перевіреного дерева (`compiler.py: CodeGenVisitor`)**:
+   - **`coerce(value, have, want)`**: реалізовано метод приведення типів. Вставляє інструкцію розширення `sext i32 %val to i64` у 5 місцях:
+     1. Ініціалізація змінної (`DeclNode`).
+     2. Присвоєння змінній (`AssignNode`).
+     3. Операнди арифметичних операцій `+ - *` (`BinOpNode`).
+     4. Операнди порівнянь `== !=` (`BinOpNode`).
+     5. Вихідне значення в `exit`, якщо це ціле число.
+   - **Порівняння**: транслюються в команду `icmp_signed` (на однакових розрядностях операндів після widening) та продукують булевий тип `i1`.
+   - **Поліморфний `exit`**:
+     - Для цілих чисел (`i32`, `i64`): розширюється до `i64` та передається у `printf` з форматом `"Program exit with result %lld\n"`.
+     - Для булевих (`bool` / `i1`): за допомогою LLVM-інструкції `select` обирає між константами `"true"` та `"false"` без розгалужень (`if`/`br`) і друкує `"Program exit with result %s\n"`.
+
+2. **Набори тестів (`tests/ok` та `tests/err`)**:
+   - 📂 **[`tests/ok/`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok)** (7 тестів):
+     - `i64_widen.txt` — розширення в ініціалізаторі та всередині `+`.
+     - `i64_const.txt` — константа, що поміщається лише в `i64` (`3000000000`).
+     - `int_compare.txt` — порівняння чисел різної ширини (`i32 == i64`).
+     - `bool_compare.txt` — порівняння булевих значень (`a != b`).
+     - `bool_exit.txt` — завершення програми з булевим прапорцем (`exit false`).
+     - `worked_example_task1.txt` — еталонна програма практики (виводить `385`).
+     - `task1_exit_bool.txt` — вихід із булевим значенням виразу (виводить `true`).
+   - 📂 **[`tests/err/`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err)** (8 тестів):
+     - `bool_in_arith.txt` — булеве значення в `+`.
+     - `narrowing_init.txt` — звуження типу при ініціалізації (`i64` в `i32`).
+     - `narrowing_assign.txt` — звуження типу при присвоєнні (`i64` в `i32`).
+     - `const_overflow.txt` — константа більше $2^{63}-1$.
+     - `bool_compare_int.txt` — порівняння `bool` з `i32`.
+     - `single_equals.txt` — одинарний `=`.
+     - `single_exclamation.txt` — одинарний `!`.
+     - `two_comparisons.txt` — подвійне порівняння в одному виразі (`a == b == c`).
+
+3. **Оновлений тестовий раннер ([`tests/run_tests.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py))**:
+   - Автоматично сканує як старі тести Практик 2 і 3, так і нові підпапки `tests/ok` та `tests/err`.
+   - **Результат запуску:** **41 passed, 0 failed** (усі тести пройдено!).
+
+---
+
+### 🎓 Демонстрація викладачеві (чеклист для здачі):
+
+1. **Програма Task 1 через `lli` виводить `385`**:
+   ```bash
+   ./run.sh tests/ok/worked_example_task1.txt
+   # Program exit with result 385
    ```
-4. **Запуск повного набору тестів (14 тестів)**:
+
+2. **`exit e` виводить `true`**:
+   ```bash
+   ./run.sh tests/ok/task1_exit_bool.txt
+   # Program exit with result true
+   ```
+
+3. **Рядки `sext` у згенерованому `output.ll`**:
+   ```bash
+   python3 compiler.py tests/ok/worked_example_task1.txt /tmp/task1.ll
+   grep -n "sext" /tmp/task1.ll
+   # 8:  %"wide" = sext i32 10 to i64
+   # 16:  %"wide.1" = sext i32 10 to i64
+   # 32:  %"wide.3" = sext i32 %"x.1" to i64
+   ```
+
+4. **Запуск тестового раннера**:
    ```bash
    python3 tests/run_tests.py
+   # Result: 41 passed, 0 failed.
    ```
 
-Коли будете готові, ви можете зробити `git push origin practice-2`, відкрити Pull Request у гілку `main` та додати `vovaskochko` рев'юером, як зазначено у вимогах.
+Детальний підсумок та інструкцію також збережено у воркспейсі: [`walkthrough.md`](file:///home/ubuntu/cs400/.agents/artifacts/walkthrough.md).
 
 ---
 
 User:
-щось ще що нам треба зробити для практики?
+можеш тепер окремі коміти під кожну таску зробити, тільки не втрать вміст файлів, перетестуй все
 
 Model:
-З точки зору коду та структури — **все зроблено на 100%** і відповідає всім вимогам критеріїв оцінювання (3/3 бали).
-
-Ось підсумковий чеклист того, що залишилося зробити для фінальної здачі:
-
----
-
-### Чеклист здачі практики:
-
-#### 1. В репозиторії (технічна частина — виконано):
-- [x] **Task 1 (2 бали)**: Побайтовий автоматний лексер без регулярних виразів ([`lexer.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py)).
-- [x] **Task 2 (1 бал)**: Синтаксис `i32 [mut] x{...}`, перевірка `mut`, використання до оголошення, обов'язкові `{}` ([`compiler.py`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py)).
-- [x] Генерація IR виключно через `IRBuilder` (`str(module)`).
-- [x] Набір тестів: 6 валідних та 8 з помилками разом із `.expected` файлами (вимога: щонайменше 5 і 5).
-- [x] Зручний скрипт запуску [`run.sh`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/run.sh) та документація в [`README.md`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/README.md).
-- [x] Окремі коміти для завдань у гілці `practice-2`.
-- [x] Повний лог взаємодії з AI в [`ai_usage.txt`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt).
-
----
-
-#### 2. Дії в GitHub (потрібно зробити вам):
-1. **Запушити гілки на GitHub**:
-   ```bash
-   git push -u origin main
-   git push -u origin practice-2
-   ```
-2. **Відкрити Pull Request**:
-   - З гілки `practice-2` у гілку `main`.
-   - Додати користувача **`vovaskochko`** як рев'юера (якщо репозиторій приватний — надати йому read access у Settings -> Collaborators).
-
----
-
-#### 3. Здача в Moodle:
-Прикріпити/вставити:
-1. Посилання на ваш GitHub-репозиторій.
-2. Посилання на відкритий Pull Request (`practice-2` -> `main`).
-3. Файл [`ai_usage.txt`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt).
-
----
-
-#### 4. Демонстрація викладачу (протягом 3 днів з гілки `practice-2`):
-Команди, які попросить показати викладач:
-```bash
-# 1. Список токенів для прикладу з лекції:
-python3 compiler.py --lex tests/worked_example.txt
-
-# 2. Виконання валідної програми (Program exit with result 70):
-./run.sh tests/test1_valid_spec.txt
-
-# 3. Два тести з помилками та їх line:col:
-./run.sh tests/fail1_assign_const.txt
-./run.sh tests/fail2_use_before_decl.txt
-
-# 4. Прогін усіх тестів:
-python3 tests/run_tests.py
-```
-
-Після того, як викладач перевірить PR, його потрібно буде злити (merge) у `main`, щоб Практика 3 починалася з чистого `main`.
-
----
-
-## Practice 3
-
-<!-- session: 47b6f75f-7b10-4c3e-8d27-4e5d1ecf8727 -->
-User:
-/plan привіт. працюємо над практикою 3 тижня @[.agents/w3-files/w03-practice.md] . є 4 частини. проглянь файл та зроби оверв'ю та план виконання завдання
-
-Model:
-Я проаналізував завдання для 3-го тижня з [w03-practice.md](file:///home/ubuntu/cs400/.agents/w3-files/w03-practice.md) та поточний стан кодової бази.
-
-### Огляд 4 частин завдання:
-
-1. **Task 1 — Граматика мови в EBNF (0.5 бала)**:
-   - Формалізація граматики Practice 2 мови в нотації EBNF (6–8 правил: `program`, `statement`, `decl`, `assign`, `exit`, `expr`, `term`, `factor`/`operand`).
-   - Термінали відповідають токенам лексера (`"i32"`, `"mut"`, `"exit"`, `"{"`, `"}"`, `":="`, `"+"`, `"-"`, `"*"`), нетермінали розкриваються у правила.
-   - Розміщення: у файлі [grammar.ebnf](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/grammar.ebnf) та як docstring блок на початку [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py).
-
-2. **Task 2 — Ручний рекурсивний спуск (Recursive-Descent Parser) та AST (1 бал)**:
-   - Парсер пишеться суворо вручну (заборонені будь-які генератори парсерів, regex над токенами, `eval`).
-   - Look-ahead рівно в один токен (`peek()`, `eat()`, `expect()`).
-   - Побудова строго типізованої ієрархії вузлів AST: [`Node`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py), `ProgramNode`, `StmtNode` (`DeclNode`, `AssignNode`, `ExitNode`), `ExprNode` (`BinOpNode`, `VarNode`, `ConstNode`). Вузли зберігають дані (`line`, `col`, імена, значення), а не самі об'єкти токенів.
-   - Прапорець `--ast`: `python3 compiler.py --ast input.txt` друкує дерево з відступами у 2 пробіли без запису файлу виводу.
-   - Чіткі повідомлення про синтаксичні помилки з форматом `line:column` (зокрема правильний стовпчик при передчасному закінченні рядка).
-
-3. **Task 3 — Генерація коду як обхід дерева (Tree-Walk CodeGen) (0.5 бала)**:
-   - Генерація LLVM IR викликається лише після того, як усе дерево побудоване (Visitor-патерн або метод обходу).
-   - Збереження семантичних перевірок (оголошення перед використанням, єдине оголошення, перевірка `mut` при присвоєнні) через координати вузлів AST.
-   - Повна сумісність: усі наявні 14 тестів Practice 2 продовжують успішно проходити з тим самим виводом ("Program exit with result <value>").
-
-4. **Task 4 — Повноцінні вирази з пріоритетом операцій та ланцюжками (1 бал)**:
-   - Підтримка довільних ланцюжків операцій (`+`, `-`, `*`).
-   - Пріоритет операцій (`*` вищий за `+` і `-`) та ліва асоціативність (`10 - 3 - 2` $\to$ `(10 - 3) - 2`) реалізуються безпосередньо структурою граматики (`expr` $\to$ `term` $\to$ `factor`).
-   - Створення розширеного набору тестів у `tests/`: щонайменше 5 нових валідних та 5 невалідних програм.
-
----
-
-Детальний план реалізації створено в артефакті:
-👉 [w03_parser_ast_plan.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/47b6f75f-7b10-4c3e-8d27-4e5d1ecf8727/w03_parser_ast_plan.md)
-
-Будь ласка, переглянь план та підтвердь виконання або надай зауваження, після чого я перейду до безпосередньої реалізації.
+I have launched the test run to verify the Task 1 state and will wait for it to complete.
 
 ---
 
 User:
-[w03_parser_ast_plan.md]
-L14: let's do grammar.ebnf, put it in repo.
-L15: let's do this file in the repo root
+ну що там?
 
 Model:
-Усі 4 завдання з практики 3 успішно реалізовані та протестовані:
+Всі три таски та оновлення документації розбито на окремі чисті коміти у гілці `practice-4`, вміст усіх файлів збережено та перетестовано.
 
-### Що було зроблено:
+### 📌 Історія комітів у гілці `practice-4`:
 
-1. **Task 1 — Граматика EBNF (0.5 бала)**:
-   - Створено файл [grammar.ebnf](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/grammar.ebnf) у корені репозиторію.
-   - Граматику також продубльовано у docstring на початку [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py).
+1. **Task 1** (`3a5cf9c`):
+   - `feat(frontend): implement Task 1 types, literals, comparisons, and AST dump`
+   - [lexer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py): ключові слова (`i64`, `bool`, `true`, `false`), оператори `==`, `!=`, помилки для поодиноких `=` і `!`.
+   - [grammar.ebnf](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/grammar.ebnf): оновлено граматику типувань та порівнянь.
+   - [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py): додано `BoolNode`, поле `type_name` у `DeclNode`, оновлено парсер та дамп AST.
+   - [tests/test_lexer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/test_lexer.py): 15 юніт-тестів лексера.
+   - [examples/task1_demo.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples/task1_demo.txt) та оновлені еталони `tests/*.ast`.
 
-2. **Task 2 — Ручний парсер та AST (1 бал)**:
-   - Побудовано ієрархію вузлів AST на базі Python 3.12 `@dataclass(slots=True)`: [`Node`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L26-L32), `ProgramNode`, `StmtNode` (`DeclNode`, `AssignNode`, `ExitNode`), `ExprNode` (`BinOpNode`, `VarNode`, `ConstNode`).
-   - Реалізовано ручний рекурсивний спуск (`Parser`) з look-ahead в 1 токен (`peek()`, `eat()`).
-   - Додано підтримку прапорця `--ast` (`python3 compiler.py --ast input.txt`), що виводить форматоване дерево з відступами у 2 пробіли.
-   - Забезпечено точне позиціонування помилок `line:column`, зокрема коректний стовпчик при несподіваному кінці рядка.
+2. **Task 2** (`4e4bf6b`):
+   - `feat(semantics): implement Task 2 semantic pass and symbol table`
+   - [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py): клас `SemanticChecker`, що обходить AST до генерації коду, володіє таблицею символів, декорує вузли типами (`node.type`) та посиланнями на оголошення (`node.decl`), перевіряє межі констант ($i32 \le 2^{31}-1$, $i64 \le 2^{63}-1$), забороняє звуження типів, перевіряє арифметику і порівняння.
+   - `CodeGenVisitor` повністю позбавлено семантичних перевірок (розділення відповідальностей).
+   - [examples/](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples/): 5 пар файлів з помилками та виправленнями (`demo_err1..5.txt` / `demo_err1..5_fixed.txt`).
 
-3. **Task 3 — Генерація коду через обхід дерева (0.5 бала)**:
-   - Реалізовано `CodeGenVisitor`, який обходить вузли AST та генерує LLVM IR через `llvmlite.ir.IRBuilder`.
-   - Семантичні перевірки (повторне оголошення, використання до оголошення, присвоєння не-`mut` змінним) збережено.
+3. **Task 3** (`8d12bc0`):
+   - `feat(codegen): implement Task 3 IR generation, tests/ok, tests/err, and test runner`
+   - [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py): генерація LLVM IR для `i64`, `bool`, `==`, `!=`, неявне розширення через `sext`, поліморфний `exit` (`%lld` для цілих чисел і `select` для `true`/`false`).
+   - [tests/ok/](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/): 7 позитивних тестів.
+   - [tests/err/](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/): 8 негативних тестів.
+   - [run.sh](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/run.sh) та [tests/run_tests.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py): автоматизований запуск і підтримка шляхів.
 
-4. **Task 4 — Повноцінні вирази та пріоритет операцій (1 бал)**:
-   - Реалізовано пріоритет `*` над `+`/`-` та ліву асоціативність через ланцюжки граматики (`expr` $\to$ `term` $\to$ `factor`).
-   - Додано 6 нових валідних тестів (`test7`–`test12`) та 6 нових тестів на синтаксичні помилки (`fail9`–`fail14`).
-   - Оновлено [run_tests.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py) для автоматичної перевірки `--ast` та автовизначення оточення з `llvmlite`.
-   - Оновлено документацію у [README.md](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/README.md).
-
-### Результати тестування:
-- **`run_tests.py`**: **26 із 26 тестів пройдено успішно** (14 початкових + 12 нових) + перевірка коректності дампу `--ast`.
-- **`test_lexer.py`**: **12 із 12 юніт-тестів пройдено**.
-
-Детальний підсумок та звіт зафіксовано в артефакті [walkthrough.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/47b6f75f-7b10-4c3e-8d27-4e5d1ecf8727/walkthrough.md). Усі зміни залишено у робочому дереві git без створення комітів.
-
----
-
-User:
-/plan 1. дабл чекни форматування граматики, вона так і має бути? чому є порожні рядки? 2. перевір чи дотримався ти всіх вимог до ерорів з файлу @[.agents/w3-files/w03-practice.md]. 3. чи ок що дерево малюється на фейл-тесті? 4. дай мені фрагмент коду на нашій мові програмування на рядків 10 з новоімплементованими штуками та еджкейсами
-
-Model:
-Відповіді на твої 4 запитання:
+4. **Документація** (`a1acbb6`):
+   - `docs(ai_usage): update AI usage log for practice 4`
+   - Синхронізовано [cs400-course-repo-vkatsel/ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt) та [.agents/w4-files/ai_usage.txt](file:///home/ubuntu/cs400/.agents/w4-files/ai_usage.txt).
 
 ---
 
-### 1. Форматування граматики та порожні рядки
-
-- **Чому були порожні рядки**: у формальних специфікаціях порожні рядки часто додають для візуального розділення логічних груп правил (структура програми, інструкції, вирази). Проте стандарти EBNF (зокрема ISO/IEC 14977) не вимагають порожніх рядків.
-- **Чи так має бути**: граматика може бути записана як компактно, так і з розділенням рядків. У компактному вигляді без зайвих пропусків вона містить рівно 8 правил:
-
-```ebnf
-(* Grammar for Practice 3 Language in EBNF *)
-program   ::= { statement } exit ;
-statement ::= decl | assign ;
-decl      ::= "i32" [ "mut" ] ident "{" expr "}" ;
-assign    ::= ident ":=" expr ;
-exit      ::= "exit" operand ;
-expr      ::= term { ( "+" | "-" ) term } ;
-term      ::= factor { "*" factor } ;
-factor    ::= operand ;
-operand   ::= ident | number ;
-```
-Кожен термінал у лапках (`"i32"`, `"mut"`, `"exit"`, `"{"`, `"}"`, `":="`, `"+"`, `"-"`, `"*"`) повністю відповідає токену з [lexer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py), а `ident` та `number` є лексемами-терміналами.
-
----
-
-### 2. Перевірка дотримання всіх вимог до помилок
-
-Усі вимоги з [w03-practice.md](file:///home/ubuntu/cs400/.agents/w3-files/w03-practice.md) дотримані на 100%:
-- **Формат повідомлення**: `compilation error: line L:C: <message>` у `stderr`, вихідний код `1`, файл `.ll` не створюється.
-- **Обчислення позиції при передчасному кінці рядка** (`x := x +`): колонка вказує одразу за останнім токеном (`last_token.col + len(last_token.text)`), наприклад `line 2:9: expected a constant or a variable, found end of line`.
-- **Всі типи синтаксичних помилок**:
-  - Початок інструкції не з `i32`, `ident`, `exit`: `cannot start a statement with '+'`
-  - Відсутність `:=` після ідентифікатора: `expected ':=' after 'x', got '5'`
-  - Оголошення без `{}`: `variable 'x' needs an initialiser in {}` (позиція на імені змінної)
-  - Зайві токени після повної інструкції: `unexpected '2' after the statement`
-  - Два оператори поспіль: `expected a constant or a variable, got '+'`
-  - Інструкція після `exit`: `code after exit`
-  - Відсутність `exit`: `missing exit statement`
-  - Недозволені символи (наприклад дужки `(`): `unexpected byte '('` (на рівні лексера)
-
----
-
-### 3. Чи ок, що дерево малюється на фейл-тесті?
-
-**Так, це абсолютно коректно з точки зору архітектури компілятора:**
-1. **Синтаксичні помилки** (наприклад, `fail10_trailing_op.txt`, `fail9_consecutive_ops.txt`): дерево **НЕ** малюється. Парсер викидає `CompileError` і зупиняє роботу з кодом 1.
-2. **Семантичні помилки** (наприклад, `fail1_assign_const.txt`, `fail2_use_before_decl.txt`): 
-   - Граматика та парсер відповідають **виключно за синтаксис**. Синтаксично програма `i32 x{10}; x := 20; exit x` є правильною.
-   - У завданні прямо зазначено:
-     > *"Some things the grammar cannot say: that `x` in `x := 5` was declared, that it is `mut`... Those are semantics and stay in the walk (Task 3)."*
-   - Тому прапорець `--ast` (який призначений для візуалізації розібраного дерева парсером) успішно будує та виводить синтаксичне дерево. А от під час компіляції (`compiler.py input.txt out.ll`) запускається `CodeGenVisitor`, який перевіряє семантику, видає помилку та перериває збірку.
-
----
-
-### 4. Фрагмент коду на 10 рядків із новими фічами та еджкейсами
-
-Ось програма на ~10 рядків, що демонструє пріоритет операцій (`*` над `+`/`-`), ліву асоціативність віднімання, змінні `mut`/`const`, ланцюжки присвоєнь, дозволені порожні рядки та нерівномірні пробіли:
-
-```text
-i32 base {2 + 3 * 4}
-
-i32  mut  acc { 100 - 30 - 20 }
-acc := acc * 2 - 10 + 5 * 4
-i32 step {base * 2 - 8}
-
-acc := acc + step * 3 - base
-i32 mut total {acc * 2}
-total := total - 10 - 5
-
-exit total
-```
-
-#### Трасування обчислень:
-- `base = 2 + (3 * 4) = 14` (пріоритет `*`)
-- `acc = (100 - 30) - 20 = 50` (ліва асоціативність `-`; нестандартні пробіли навколо `mut` та `{}`)
-- `acc := (50 * 2) - 10 + (5 * 4) = 100 - 10 + 20 = 110` (змішаний ланцюжок)
-- `step = (14 * 2) - 8 = 20`
-- `acc := 110 + (20 * 3) - 14 = 156`
-- `total = 156 * 2 = 312`
-- `total := (312 - 10) - 5 = 297`
-- **Результат виконання**: `Program exit with result 297`.
-
-Детальний аналітичний звіт також збережено у [w03_qna_and_analysis.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/47b6f75f-7b10-4c3e-8d27-4e5d1ecf8727/w03_qna_and_analysis.md).
-
----
-
-User:
-/plan я трохи заплутався в тому які в нас є токени і за що відповідає кожен з них. можеш зорієнтувати?
-
-Model:
-У нашій мові програмування система токенів була закладена в Practice 2 у файлі [lexer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py).
-
-Лексер перетворює вихідний текст програми на список рядків із токенами (`list[list[Token]]`), де кожен токен є екземпляром класу [`Token`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py#L14-L54) з полями:
-- `kind`: основна категорія токена;
-- `text`: буквальний текст із вихідного коду;
-- `line` та `col`: координати початку токена для звітів про помилки;
-- `subkind`: додаткове уточнення підтипу (опціонально).
-
----
-
-### Повна таблиця токенів нашої мови
-
-| Категорія (`kind`) | Текст (`text`) | Підтип (`subkind`) | За що відповідає |
-| :--- | :--- | :--- | :--- |
-| **`keyword`** | `"i32"` | `"typename"` | Оголошення типу 32-бітного цілого числа в `decl` |
-| **`keyword`** | `"mut"` | `"specifier"` | Специфікатор мутабельності змінної (дозволяє `:=`) |
-| **`keyword`** | `"exit"` | `"statement"` | Завершення програми з друком результату |
-| **`identifier`** | напр. `"x"`, `"total"` | `None` | Ім'я змінної (літери, цифри, `_`, не починається з цифри) |
-| **`constant`** | напр. `"0"`, `"42"` | `"numeric"` | Десяткове ціле додатне число (літерал) |
-| **`operator`** | `":="` | `None` | Оператор присвоєння (лише для змінних з `mut`) |
-| **`operator`** | `"+"` | `None` | Арифметичне додавання у виразах |
-| **`operator`** | `"-"` | `None` | Арифметичне віднімання у виразах (лівоасоціативне) |
-| **`operator`** | `"*"` | `None` | Арифметичне множення (вищий пріоритет за `+` і `-`) |
-| **`block`** | `"{"` | `"start"` | Початок блоку ініціалізатора значення змінної |
-| **`block`** | `"}"` | `"end"` | Кінець блоку ініціалізатора значення змінної |
-| **`endline`** | `"\n"` | `None` | Розділювач рядків (позначає завершення інструкції) |
-
----
-
-### Наочний приклад токенізації
-
-Якщо подати такий рядок коду:
-```text
-i32 mut y { x + 10 }
-```
-
-Лексер згенерує наступні 8 токенів:
-1. `Token(kind="keyword", text="i32", subkind="typename", line=1, col=1)`
-2. `Token(kind="keyword", text="mut", subkind="specifier", line=1, col=5)`
-3. `Token(kind="identifier", text="y", line=1, col=9)`
-4. `Token(kind="block", text="{", subkind="start", line=1, col=11)`
-5. `Token(kind="identifier", text="x", line=1, col=13)`
-6. `Token(kind="operator", text="+", line=1, col=15)`
-7. `Token(kind="constant", text="10", subkind="numeric", line=1, col=17)`
-8. `Token(kind="block", text="}", subkind="end", line=1, col=20)`
-9. `Token(kind="endline", text="\n", line=1, col=21)`
-
----
-
-### Як ці токени використовує парсер (Practice 3)
-
-Парсер споживає цей потік токенів і будує дерево AST:
-1. **Службові токени зникають або стають властивостями**:
-   - `"i32"`, `"{"`, `"}"` просто перевіряються (`expect`) і не потрапляють у дерево.
-   - `"mut"` перетворюється на булевий прапорець `mutable = True` у вузлі `DeclNode`.
-   - `":="` перевіряється в присвоєнні, а сам вузол стає `AssignNode`.
-   - `"\n"` відкидається — факт кінця рядка означає, що інструкція завершена.
-2. **Токени значень та операцій стають вузлами дерева**:
-   - `"10"` $\to$ `ConstNode(value=10)`
-   - `"x"` $\to$ `VarNode(name="x")`
-   - `"+"` $\to$ `BinOpNode(op="+", left=..., right=...)`
-3. **Координати (`line`, `col`) зберігаються**:
-   - Кожен вузол AST зберігає `line` та `col` токена, з якого він утворився. Завдяки цьому при наступних перевірках компілятор завжди знає точне місце помилки без необхідності тримати самі об'єкти токенів.
-
----
-
-User:
-/plan окей глянь чи все у нас зроблено для практики 3, якшо так перевір тести і закоміть
-
-Model:
-Усе готово!
-
-1. **Фінальна перевірка тестів**:
-   - **`run_tests.py`**: **26 із 26 тестів пройдено** (усі валідні програми виконуються з очікуваним виводом, усі фейл-тести правильно викидають помилки компіляції) + успішна перевірка виводу `--ast`.
-   - **`test_lexer.py`**: **12 із 12 тестів пройдено**.
-2. **Очищення**:
-   - Видалено тимчасові тестові файли.
-   - У робочій директорії лише чистий код, тести та документація.
-3. **Коміт створено**:
-   - **Гілка**: `practice-3`
-   - **Хеш**: `d038df2`
-   - **Повідомлення**: `feat(parser): implement AST, recursive-descent parser, tree-walk codegen, and expression precedence`
-   - **Додані файли**:
-     - [grammar.ebnf](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/grammar.ebnf)
-     - [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py)
-     - [README.md](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/README.md)
-     - [tests/run_tests.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py), [tests/test_lexer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/test_lexer.py)
-     - 12 нових файлів тестів (`test7`–`test12`, `fail9`–`fail14`) разом із `.expected` файлами.
-
----
-
-User:
-/plan також потрібно пофіксити наступні речі з практики два (комітити будем вже в гілку цієї практики): Checked on clean checkout in Ubuntu 24.04: tests/run_tests.py gives 14/14, error positions agree with the reference, code after exit, blank lines, tabs and indented lines are handled. Lexer is in separate module, byte-level state machine, and --lex prints tokens in the format from the task. Accepted.
-
-Small things before Practice 3:
-
-Token dump shows text and kind but not line:col. Please add position to the output, with the parser you will look at it all the time.
-tests/worked_example.txt has no expected file, and as a program it is not valid (it is lexer input). Either give it an expected token dump or move it out of tests/.
-Also please add ai_usage.txt to the repository, it is in Moodle but not here.
-
-Model:
-Я проаналізував зауваження викладача та підготував план виправлення 3 пунктів:
-
-1. **Додавання позиції `line:col` у дамп токенів (`--lex`)**:
-   - Оновимо метод `Token.__repr__` у [lexer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py), щоб кожен токен містив координати `line:col` останнім елементом:
-     - `(i32, keyword, typename, 1:1)`
-     - `(mut, keyword, specifier, 1:5)`
-     - `(x, identifier, 1:9)`
-     - `({, block, start, 1:10})`
-     - `(10, constant, numeric, 1:12)`
-     - `(\n, endline, 1:16)`
-
-2. **Організація `worked_example.txt`**:
-   - Перемістимо `tests/worked_example.txt` у `examples/worked_example.txt` та додамо файл очікуваного дампу токенів `examples/worked_example.tokens`. Таким чином, папка `tests/` міститиме суворо програми для тестів компілятора.
-
-3. **Додавання `ai_usage.txt` у репозиторій**:
-   - Видалимо `ai_usage.txt` із [.gitignore](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/.gitignore).
-   - Створимо `cs400-course-repo-vkatsel/ai_usage.txt`, об'єднавши логи за 2 та 3 тижні.
-   - Оновимо скрипт автоматичного логування [.agents/log_ai_usage.py](file:///home/ubuntu/cs400/.agents/log_ai_usage.py) та інструкції [.agents/AGENTS.md](file:///home/ubuntu/cs400/.agents/AGENTS.md), щоб він синхронізував `ai_usage.txt` безпосередньо в репозиторій.
-
----
-
-План оформлено в артефакті:
-👉 [practice2_fixes_plan.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/47b6f75f-7b10-4c3e-8d27-4e5d1ecf8727/practice2_fixes_plan.md)
-
-Будь ласка, переглянь та підтвердь виконання або надай коментарі, після чого я внесу зміни, запущу перевірку тестів і зроблю коміт у гілку `practice-3`.
-
----
-
-User:
-[practice2_fixes_plan.md]
-L21: +
-L57: i'm not sure about how to format the ai_usage for every week. does the practice files actually say something about where it should be and containt what.
-
-Model:
-Усі три зауваження викладача закриті та зафіксовані у гілці `practice-3`:
-
-### 1. Щодо формату та розташування `ai_usage.txt`:
-- **Що вимагають завдання курсу**: методички (`w02-practice.md` та `w03-practice.md`) **не вимагають спеціального формату чи схеми** для `ai_usage.txt`, а лише зазначають: *«ai_usage.txt with your AI log»*.
-- **Чому викладач звернув увагу**: у [README.md](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/README.md) файл `ai_usage.txt` зазначений у структурі репозиторію, але його там не було через `.gitignore`. Викладач перевіряв «чистий checkout» репозиторію на Ubuntu і побачив, що у Moodle файл є, а в Git — відсутній.
-- **Як тепер організовано**:
-  - `ai_usage.txt` видалено з [.gitignore](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/.gitignore).
-  - Створено [ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt) у корені репозиторію з чіткими розділами `## Practice 2` та `## Practice 3`.
-  - Оновлено скрипт [.agents/log_ai_usage.py](file:///home/ubuntu/cs400/.agents/log_ai_usage.py), щоб майбутні логи автоматично дублювалися у файл репозиторію.
-
----
-
-### 2. Додавання `line:col` у дамп токенів:
-У [lexer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py) метод `Token.__repr__` тепер додає позицію:
-```text
-(i32, keyword, typename, 1:4) (mut, keyword, specifier, 1:8) (x, identifier, 1:12) ({, block, start, 1:13) (10, constant, numeric, 1:15) (}, block, end, 1:18) (\n, endline, 1:19)
-(var, identifier, 2:2) (t, identifier, 2:6) (\n, endline, 2:7)
-```
-
----
-
-### 3. Організація `worked_example.txt`:
-- Файл перенесено з `tests/` до [examples/worked_example.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples/worked_example.txt).
-- Поруч створено еталонний дамп [examples/worked_example.tokens](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples/worked_example.tokens).
-- Папка `tests/` тепер містить лише тести компілятора, які запускаються через `run_tests.py`.
-
----
-
-### Результати перевірки та коміт:
-- **`run_tests.py`**: 26 із 26 тестів пройдено + успішна перевірка `--ast`.
-- **`test_lexer.py`**: 12 із 12 тестів пройдено.
-- **Новий коміт**: `dda43d1` у гілці `practice-3`
-  - Повідомлення: `fix(lexer): add token position to dump, organize worked example, and track ai_usage.txt`
-
----
-
-User:
-/plan ще щось що потрібно зробити?
-
-Model:
-У коді та структурі проєкту **все виконано на 100%**:
-
-### Чеклист виконаного:
-- [x] **Task 1 (Граматика EBNF)**: файл [grammar.ebnf](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/grammar.ebnf) у корені репозиторію та опис у [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py).
-- [x] **Task 2 (Парсер та AST)**: ручний рекурсивний спуск, ієрархія класів AST (`slots=True`), прапорець `--ast` з форматуванням у 2 пробіли, точні координати помилок `line:col`.
-- [x] **Task 3 (Tree-walk CodeGen)**: `CodeGenVisitor` обходить AST і генерує LLVM IR через `IRBuilder`, семантичні перевірки на вузлах AST.
-- [x] **Task 4 (Пріоритет операцій та ланцюжки)**: ланцюжки виразів `+`, `-`, `*` з пріоритетом і лівою асоціативністю, 6 нових валідних та 6 нових невалідних тестів.
-- [x] **Зауваження викладача до практики 2**:
-  - `line:col` додано до дампу токенів лексера (`--lex`).
-  - `tests/worked_example.txt` перенесено до [examples/worked_example.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples/worked_example.txt) з еталонним файлом токенів.
-  - `ai_usage.txt` додано в корінь репозиторію та розблоковано в `.gitignore`.
-- [x] **Тести**: 26/26 тестів компілятора + перевірка `--ast` + 12/12 юніт-тестів лексера пройдено без жодних помилок.
-- [x] **Git**: зміни закомічено в локальну гілку `practice-3`.
-
----
-
-### Що залишається зробити для здачі (Git & Moodle):
-
-1. **Запушити гілку на GitHub**:
-   ```bash
-   git push -u origin practice-3
-   ```
-   *(Якщо хочеш, можу виконати команду push просто зараз)*.
-
-2. **Створити Pull Request**:
-   - На GitHub відкрити PR із гілки `practice-3` в `main`.
-   - Додати користувача **`vovaskochko`** як рев'юера (як вказано в правилах курсу).
-
-3. **Здати роботу в Moodle**:
-   - Посилання на GitHub-репозиторій.
-   - Посилання на відкритий Pull Request.
-   - Завантажити файл [ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt).
-
----
-
-User:
-/plan чекай а шо мої останні промпти не записались в аі юзедж?
-
-Model:
-Ось що сталося і як це виправлено:
-
-### 1. Чому не додалися останні промпти:
-У скрипті логування [.agents/log_ai_usage.py](file:///home/ubuntu/cs400/.agents/log_ai_usage.py) при попередньому редагуванні випадково випав рядок `full_text = "\n".join(content_blocks)`, через що виникав `NameError`, який тихо перехоплювався блоком `except`. 
-- **Виправлено**: скрипт виправлено та перевірено.
-- **Оновлено**: усі останні діалоги (включно із зауваженнями щодо практики 2, обговоренням формату `ai_usage.txt` та питанням «ще щось що потрібно зробити?») тепер повністю зафіксовані в [ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt) та [w3-files/ai_usage.txt](file:///home/ubuntu/cs400/.agents/w3-files/ai_usage.txt).
-- **Створено коміт**: `docs(ai_usage): update log with recent turns`.
-
----
-
-### 2. Щодо `git push`:
-Оскільки віддалений репозиторій налаштований через HTTPS (`https://github.com/vkatsel/cs400-course-repo-vkatsel.git`), команда `git push` вимагає введення твоїх GitHub-облікових даних (Username та Personal Access Token) в інтерактивному режимі.
-
-Будь ласка, виконай команду push у своєму терміналі:
-```bash
-cd /home/ubuntu/cs400/cs400-course-repo-vkatsel
-git push origin practice-3
-```
-
-Після цього відкривай Pull Request з `practice-3` у `main` і додавай рев'юера `vovaskochko`!
-
----
-
-User:
-привіт, прийшов рев'ю на пр. треба виправити: Checked on clean checkout: everything matches the task, every position I compared is the same as mine, CRLF works, 26/26 in your runner. Accepted.
-
-Small thing: ExitNode inherits StmtNode, and visit_program uses match instead of accept. There are no .ast files for the valid tests.
-
-Model:
-Я проаналізував усі три зауваження рев'юера (`vovaskochko`):
-
-1. **`ExitNode inherits StmtNode`**:
-   - У нашій граматиці `program ::= { statement } exit` та `statement ::= decl | assign`.
-   - `exit` не є підвидом `statement`, тому `ExitNode` має успадковувати безпосередньо базовий клас `Node`, а не `StmtNode`.
-
-2. **`visit_program uses match instead of accept`**:
-   - Відповідно до класичного патерну Visitor з умови практики, на всіх вузлах AST додамо метод `accept(visitor)` (`DeclNode.accept` викликає `visitor.visit_decl(self)`, `ExitNode.accept` викликає `visitor.visit_exit(self)` тощо).
-   - У `CodeGenVisitor.visit_program` замінимо `match stmt:` на прямий виклик `stmt.accept(self)` та `node.exit.accept(self)`.
-
-3. **`There are no .ast files for the valid tests`**:
-   - Згенеруємо еталонні файли `tests/test*.ast` для всіх 12 валідних тестів.
-   - Оновимо [run_tests.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py), щоб раннер автоматично перевіряв вивід `compiler.py --ast <file.txt>` проти відповідного `<file.ast>` для кожного тесту.
-
----
-
-Детальний план оформлено в артефакті:
-👉 [pr_review_fixes_plan.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/47b6f75f-7b10-4c3e-8d27-4e5d1ecf8727/pr_review_fixes_plan.md)
-
-Будь ласка, переглянь та підтвердь виконання, після чого я внесу зміни, протестую та підготую коміт.
-
----
-
-User:
-[Approved] pr_review_fixes_plan.md
-
-Model:
-Запустив перевірку оновленого тестового раннера.
+### 🧪 Результати перевірки після створення комітів:
+- **Юніт-тести лексера**: `python3 -m unittest tests/test_lexer.py` $\implies$ **15/15 passed**
+- **Повний тестовий раннер**: `python3 tests/run_tests.py` $\implies$ **41 passed, 0 failed** (усі тести Practice 3 + Practice 4 `tests/ok` і `tests/err`)
+- **Виконання через `run.sh`**:
+  - `./run.sh tests/ok/worked_example_task1.txt` $\implies$ `Program exit with result 385`
+  - `./run.sh tests/ok/task1_exit_bool.txt` $\implies$ `Program exit with result true`
+- **Git статус**: робоче дерево повністю чисте (`working tree clean`).
 
 ---
