@@ -11,12 +11,15 @@ OUTPUT="${2:-/tmp/output.ll}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Activate virtualenv if available
+if [ -d "/home/ubuntu/lcd/lib/python3.12/site-packages" ]; then
+    export PYTHONPATH="/home/ubuntu/lcd/lib/python3.12/site-packages${PYTHONPATH:+:$PYTHONPATH}"
+fi
 if [ -f "/home/ubuntu/lcd/bin/activate" ]; then
-    source "/home/ubuntu/lcd/bin/activate"
+    source "/home/ubuntu/lcd/bin/activate" || true
 elif [ -f "$HOME/lcd/bin/activate" ]; then
-    source "$HOME/lcd/bin/activate"
+    source "$HOME/lcd/bin/activate" || true
 elif [ -f "$DIR/.venv/bin/activate" ]; then
-    source "$DIR/.venv/bin/activate"
+    source "$DIR/.venv/bin/activate" || true
 fi
 
 # Step 1: Compile to LLVM IR

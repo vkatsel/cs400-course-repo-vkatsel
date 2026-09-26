@@ -1,9 +1,9 @@
 Program
-  Decl base const
+  Decl base i32 const
     Const 6
-  Decl multiplier const
+  Decl multiplier i32 const
     Const 7
-  Decl total mut
+  Decl total i32 mut
     BinOp *
       Var base
       Var multiplier

@@ -1,11 +1,11 @@
 Program
-  Decl a const
+  Decl a i32 const
     Const 100
-  Decl b const
+  Decl b i32 const
     Const 5
-  Decl c const
+  Decl c i32 const
     Const 2
-  Decl d mut
+  Decl d i32 mut
     BinOp +
       BinOp -
         BinOp -

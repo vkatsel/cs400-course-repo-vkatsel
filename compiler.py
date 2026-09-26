@@ -14,20 +14,20 @@ EBNF Grammar:
 """
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+for _p in (
+    "/home/ubuntu/lcd/lib/python3.12/site-packages",
+    str(Path.home() / "lcd/lib/python3.12/site-packages"),
+):
+    if _p not in sys.path and Path(_p).exists():
+        sys.path.insert(0, _p)
 
 import llvmlite.binding as llvm
 from lexer import CompileError, Token, lex, print_tokens
 from llvmlite import ir
-
-
-@dataclass(slots=True)
-class Symbol:
-    name: str
-    is_mut: bool
-    alloca: ir.AllocaInstr
-    line: int
-    col: int
 
 
 @dataclass(slots=True)
@@ -38,13 +38,13 @@ class Node:
     def dump(self, indent: int = 0) -> str:
         raise NotImplementedError
 
-    def accept(self, visitor: "CodeGenVisitor"):
+    def accept(self, visitor: Any):
         raise NotImplementedError
 
 
 @dataclass(slots=True)
 class ExprNode(Node):
-    pass
+    type: str | None = field(default=None, init=False)
 
 
 @dataclass(slots=True)
@@ -54,18 +54,31 @@ class ConstNode(ExprNode):
     def dump(self, indent: int = 0) -> str:
         return f"{' ' * (indent * 2)}Const {self.value}"
 
-    def accept(self, visitor: "CodeGenVisitor") -> ir.Value:
+    def accept(self, visitor: Any) -> Any:
         return visitor.visit_const(self)
+
+
+@dataclass(slots=True)
+class BoolNode(ExprNode):
+    value: bool
+
+    def dump(self, indent: int = 0) -> str:
+        prefix = " " * (indent * 2)
+        return f"{prefix}Bool {'true' if self.value else 'false'}"
+
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_bool(self)
 
 
 @dataclass(slots=True)
 class VarNode(ExprNode):
     name: str
+    decl: "DeclNode | None" = field(default=None, init=False)
 
     def dump(self, indent: int = 0) -> str:
         return f"{' ' * (indent * 2)}Var {self.name}"
 
-    def accept(self, visitor: "CodeGenVisitor") -> ir.Value:
+    def accept(self, visitor: Any) -> Any:
         return visitor.visit_var(self)
 
 
@@ -83,7 +96,7 @@ class BinOpNode(ExprNode):
             f"{self.right.dump(indent + 1)}"
         )
 
-    def accept(self, visitor: "CodeGenVisitor") -> ir.Value:
+    def accept(self, visitor: Any) -> Any:
         return visitor.visit_binop(self)
 
 
@@ -95,29 +108,32 @@ class StmtNode(Node):
 @dataclass(slots=True)
 class DeclNode(StmtNode):
     name: str
+    type_name: str
     mutable: bool
     init: ExprNode
+    alloca: ir.AllocaInstr | None = field(default=None, init=False)
 
     def dump(self, indent: int = 0) -> str:
         prefix = " " * (indent * 2)
         kind = "mut" if self.mutable else "const"
-        return f"{prefix}Decl {self.name} {kind}\n{self.init.dump(indent + 1)}"
+        return f"{prefix}Decl {self.name} {self.type_name} {kind}\n{self.init.dump(indent + 1)}"
 
-    def accept(self, visitor: "CodeGenVisitor") -> None:
-        visitor.visit_decl(self)
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_decl(self)
 
 
 @dataclass(slots=True)
 class AssignNode(StmtNode):
     name: str
     value: ExprNode
+    decl: "DeclNode | None" = field(default=None, init=False)
 
     def dump(self, indent: int = 0) -> str:
         prefix = " " * (indent * 2)
         return f"{prefix}Assign {self.name}\n{self.value.dump(indent + 1)}"
 
-    def accept(self, visitor: "CodeGenVisitor") -> None:
-        visitor.visit_assign(self)
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_assign(self)
 
 
 @dataclass(slots=True)
@@ -128,8 +144,8 @@ class ExitNode(Node):
         prefix = " " * (indent * 2)
         return f"{prefix}Exit\n{self.value.dump(indent + 1)}"
 
-    def accept(self, visitor: "CodeGenVisitor") -> None:
-        visitor.visit_exit(self)
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_exit(self)
 
 
 @dataclass(slots=True)
@@ -144,8 +160,8 @@ class ProgramNode(Node):
         lines.append(self.exit.dump(indent + 1))
         return "\n".join(lines)
 
-    def accept(self, visitor: "CodeGenVisitor") -> None:
-        visitor.visit_program(self)
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_program(self)
 
 
 class Parser:
@@ -172,7 +188,7 @@ class Parser:
             )
         return (1, 1)
 
-    def parse_operand(self) -> ExprNode:
+    def parse_factor(self) -> ExprNode:
         tok = self.peek()
         if tok is None:
             line, col = self._end_of_line_loc()
@@ -182,6 +198,9 @@ class Parser:
         if tok.is_number:
             self.eat()
             return ConstNode(tok.line, tok.col, int(tok.text))
+        if tok.is_boolean or (tok.is_keyword and tok.text in ("true", "false")):
+            self.eat()
+            return BoolNode(tok.line, tok.col, tok.text == "true")
         if tok.is_identifier:
             self.eat()
             return VarNode(tok.line, tok.col, tok.text)
@@ -189,8 +208,8 @@ class Parser:
             tok.line, tok.col, f"expected a constant or a variable, got '{tok.text}'"
         )
 
-    def parse_factor(self) -> ExprNode:
-        return self.parse_operand()
+    def parse_operand(self) -> ExprNode:
+        return self.parse_factor()
 
     def parse_term(self) -> ExprNode:
         node = self.parse_factor()
@@ -204,7 +223,7 @@ class Parser:
                 break
         return node
 
-    def parse_expr(self) -> ExprNode:
+    def parse_arith(self) -> ExprNode:
         node = self.parse_term()
         while True:
             tok = self.peek()
@@ -216,8 +235,25 @@ class Parser:
                 break
         return node
 
+    def parse_expr(self) -> ExprNode:
+        node = self.parse_arith()
+        tok = self.peek()
+        if tok is not None and tok.is_operator and tok.text in ("==", "!="):
+            op_tok = self.eat()
+            right = self.parse_arith()
+            node = BinOpNode(op_tok.line, op_tok.col, op_tok.text, node, right)
+            next_tok = self.peek()
+            if next_tok is not None and next_tok.is_operator and next_tok.text in ("==", "!="):
+                raise CompileError(
+                    next_tok.line,
+                    next_tok.col,
+                    "multiple comparisons in one expression are not allowed",
+                )
+        return node
+
     def parse_decl(self) -> DeclNode:
-        self.eat()  # "i32"
+        type_tok = self.eat()  # "i32", "i64", "bool"
+        type_name = type_tok.text
         mutable = False
         tok = self.peek()
         if tok is not None and tok.text == "mut":
@@ -262,7 +298,9 @@ class Parser:
                 extra.line, extra.col, f"unexpected '{extra.text}' after the statement"
             )
 
-        return DeclNode(name_tok.line, name_tok.col, name_tok.text, mutable, init_expr)
+        return DeclNode(
+            name_tok.line, name_tok.col, name_tok.text, type_name, mutable, init_expr
+        )
 
     def parse_assign(self) -> AssignNode:
         name_tok = self.eat()
@@ -291,7 +329,7 @@ class Parser:
 
     def parse_exit(self) -> ExitNode:
         exit_tok = self.eat()
-        operand = self.parse_operand()
+        operand = self.parse_factor()
         if (extra := self.peek()) is not None:
             raise CompileError(
                 extra.line, extra.col, f"unexpected '{extra.text}' after the statement"
@@ -303,7 +341,7 @@ class Parser:
         if tok is None:
             line, col = self._end_of_line_loc()
             raise CompileError(line, col, "unexpected end of line")
-        if tok.text == "i32":
+        if tok.text in ("i32", "i64", "bool"):
             return self.parse_decl()
         if tok.is_identifier:
             return self.parse_assign()
@@ -343,10 +381,122 @@ class Parser:
         return ProgramNode(1, 1, stmts, exit_node)
 
 
+class SemanticChecker:
+    def __init__(self) -> None:
+        self.symbols: dict[str, DeclNode] = {}
+
+    def visit_const(self, node: ConstNode) -> str:
+        if 0 <= node.value <= 2147483647:
+            node.type = "i32"
+        elif node.value <= 9223372036854775807:
+            node.type = "i64"
+        else:
+            raise CompileError(
+                node.line, node.col, f"constant {node.value} does not fit in i64"
+            )
+        return node.type
+
+    def visit_bool(self, node: BoolNode) -> str:
+        node.type = "bool"
+        return node.type
+
+    def visit_var(self, node: VarNode) -> str:
+        if node.name not in self.symbols:
+            raise CompileError(
+                node.line,
+                node.col,
+                f"variable '{node.name}' is used before its declaration",
+            )
+        node.decl = self.symbols[node.name]
+        node.type = node.decl.type_name
+        return node.type
+
+    def visit_binop(self, node: BinOpNode) -> str:
+        lt = node.left.accept(self)
+        rt = node.right.accept(self)
+        if node.op in ("+", "-", "*"):
+            if lt == "bool" or rt == "bool":
+                raise CompileError(
+                    node.line, node.col, f"cannot apply '{node.op}' to bool"
+                )
+            node.type = "i64" if (lt == "i64" or rt == "i64") else "i32"
+            return node.type
+        elif node.op in ("==", "!="):
+            if (lt in ("i32", "i64") and rt in ("i32", "i64")) or (
+                lt == "bool" and rt == "bool"
+            ):
+                node.type = "bool"
+                return node.type
+            raise CompileError(node.line, node.col, f"cannot compare {lt} with {rt}")
+        raise CompileError(node.line, node.col, f"unsupported operator '{node.op}'")
+
+    def check_assignable(
+        self, expr: ExprNode, want: str, at: Node, what: str
+    ) -> None:
+        have = expr.type
+        if have == want or (have == "i32" and want == "i64"):
+            return
+        if isinstance(expr, ConstNode) and want == "i32" and have == "i64":
+            raise CompileError(
+                expr.line,
+                expr.col,
+                f"constant {expr.value} does not fit in i32",
+            )
+        raise CompileError(
+            at.line,
+            at.col,
+            f"cannot {what} of type {want} with a value of type {have}",
+        )
+
+    def visit_decl(self, node: DeclNode) -> None:
+        if node.name in self.symbols:
+            raise CompileError(
+                node.line, node.col, f"variable '{node.name}' is already declared"
+            )
+        node.init.accept(self)
+        self.check_assignable(
+            node.init, node.type_name, node, f"initialise '{node.name}'"
+        )
+        self.symbols[node.name] = node
+
+    def visit_assign(self, node: AssignNode) -> None:
+        if node.name not in self.symbols:
+            raise CompileError(
+                node.line,
+                node.col,
+                f"variable '{node.name}' is used before its declaration",
+            )
+        node.decl = self.symbols[node.name]
+        if not node.decl.mutable:
+            raise CompileError(
+                node.line, node.col, f"cannot assign to '{node.name}': it is not mut"
+            )
+        node.value.accept(self)
+        self.check_assignable(
+            node.value, node.decl.type_name, node, f"assign to '{node.name}'"
+        )
+
+    def visit_exit(self, node: ExitNode) -> None:
+        val_type = node.value.accept(self)
+        if val_type not in ("i32", "i64", "bool"):
+            raise CompileError(
+                node.value.line,
+                node.value.col,
+                f"unsupported exit type '{val_type}'",
+            )
+
+    def visit_program(self, node: ProgramNode) -> None:
+        for stmt in node.statements:
+            stmt.accept(self)
+        node.exit.accept(self)
+
+
 class CodeGenVisitor:
     def __init__(self, module: ir.Module) -> None:
         self.module = module
+        self.i64_type = ir.IntType(64)
         self.i32_type = ir.IntType(32)
+        self.i1_type = ir.IntType(1)
         self.i8_type = ir.IntType(8)
 
         self.main_fn = ir.Function(
@@ -360,72 +510,103 @@ class CodeGenVisitor:
             name="printf",
         )
 
-        fmt_bytes = b"Program exit with result %d\n\0"
-        self.fmt_var = ir.GlobalVariable(
-            self.module, ir.ArrayType(self.i8_type, len(fmt_bytes)), name="fmt"
-        )
-        self.fmt_var.linkage = "private"
-        self.fmt_var.global_constant = True
-        self.fmt_var.initializer = ir.Constant(
-            ir.ArrayType(self.i8_type, len(fmt_bytes)), bytearray(fmt_bytes)
-        )
+        fmt_int_bytes = b"Program exit with result %lld\n\0"
+        self.fmt_int_var = self._create_global_string("fmt_int", fmt_int_bytes)
 
-        self.symbols: dict[str, Symbol] = {}
+        fmt_bool_bytes = b"Program exit with result %s\n\0"
+        self.fmt_bool_var = self._create_global_string("fmt_bool", fmt_bool_bytes)
+
+        self.str_true_var = self._create_global_string("str_true", b"true\0")
+        self.str_false_var = self._create_global_string("str_false", b"false\0")
+
+    def _create_global_string(self, name: str, data: bytes) -> ir.GlobalVariable:
+        arr_t = ir.ArrayType(self.i8_type, len(data))
+        var = ir.GlobalVariable(self.module, arr_t, name=name)
+        var.linkage = "private"
+        var.global_constant = True
+        var.initializer = ir.Constant(arr_t, bytearray(data))
+        return var
+
+    def _llvm_type(self, type_name: str) -> ir.Type:
+        match type_name:
+            case "i64":
+                return self.i64_type
+            case "bool":
+                return self.i1_type
+            case _:
+                return self.i32_type
+
+    def coerce(self, value: ir.Value, have: str | None, want: str | None) -> ir.Value:
+        if have == "i32" and want == "i64":
+            return self.builder.sext(value, self.i64_type, name="wide")
+        return value
 
     def visit_const(self, node: ConstNode) -> ir.Value:
+        if node.type == "i64":
+            return ir.Constant(self.i64_type, node.value)
         return ir.Constant(self.i32_type, node.value)
 
+    def visit_bool(self, node: BoolNode) -> ir.Value:
+        return ir.Constant(self.i1_type, 1 if node.value else 0)
+
     def visit_var(self, node: VarNode) -> ir.Value:
-        if node.name not in self.symbols:
-            raise CompileError(
-                node.line, node.col, f"variable '{node.name}' is used before its declaration"
-            )
-        return self.builder.load(self.symbols[node.name].alloca, name=node.name)
+        assert node.decl is not None and node.decl.alloca is not None
+        return self.builder.load(node.decl.alloca, name=node.name)
 
     def visit_binop(self, node: BinOpNode) -> ir.Value:
         left_val = node.left.accept(self)
         right_val = node.right.accept(self)
         match node.op:
             case "+":
+                left_val = self.coerce(left_val, node.left.type, node.type)
+                right_val = self.coerce(right_val, node.right.type, node.type)
                 return self.builder.add(left_val, right_val)
             case "-":
+                left_val = self.coerce(left_val, node.left.type, node.type)
+                right_val = self.coerce(right_val, node.right.type, node.type)
                 return self.builder.sub(left_val, right_val)
             case "*":
+                left_val = self.coerce(left_val, node.left.type, node.type)
+                right_val = self.coerce(right_val, node.right.type, node.type)
                 return self.builder.mul(left_val, right_val)
+            case "==" | "!=":
+                cmp_type = (
+                    "i64"
+                    if (node.left.type == "i64" or node.right.type == "i64")
+                    else node.left.type
+                )
+                left_val = self.coerce(left_val, node.left.type, cmp_type)
+                right_val = self.coerce(right_val, node.right.type, cmp_type)
+                return self.builder.icmp_signed(node.op, left_val, right_val)
             case _:
                 raise CompileError(node.line, node.col, f"unsupported operator '{node.op}'")
 
     def visit_decl(self, node: DeclNode) -> None:
-        if node.name in self.symbols:
-            raise CompileError(
-                node.line, node.col, f"variable '{node.name}' is already declared"
-            )
         init_val = node.init.accept(self)
-        slot = self.builder.alloca(self.i32_type, name=node.name)
+        init_val = self.coerce(init_val, node.init.type, node.type_name)
+        slot = self.builder.alloca(self._llvm_type(node.type_name), name=node.name)
         self.builder.store(init_val, slot)
-        self.symbols[node.name] = Symbol(
-            node.name, node.mutable, slot, node.line, node.col
-        )
+        node.alloca = slot
 
     def visit_assign(self, node: AssignNode) -> None:
-        if node.name not in self.symbols:
-            raise CompileError(
-                node.line,
-                node.col,
-                f"variable '{node.name}' is used before its declaration",
-            )
-        sym = self.symbols[node.name]
-        if not sym.is_mut:
-            raise CompileError(
-                node.line, node.col, f"cannot assign to '{node.name}': it is not mut"
-            )
+        assert node.decl is not None and node.decl.alloca is not None
         val = node.value.accept(self)
-        self.builder.store(val, sym.alloca)
+        val = self.coerce(val, node.value.type, node.decl.type_name)
+        self.builder.store(val, node.decl.alloca)
 
     def visit_exit(self, node: ExitNode) -> None:
         exit_val = node.value.accept(self)
-        fmt_ptr = self.builder.bitcast(self.fmt_var, ir.PointerType(self.i8_type))
-        self.builder.call(self.printf_fn, [fmt_ptr, exit_val])
+        val_type = node.value.type
+        if val_type in ("i32", "i64"):
+            wide_val = self.coerce(exit_val, val_type, "i64")
+            fmt_ptr = self.builder.bitcast(self.fmt_int_var, ir.PointerType(self.i8_type))
+            self.builder.call(self.printf_fn, [fmt_ptr, wide_val])
+        elif val_type == "bool":
+            fmt_ptr = self.builder.bitcast(self.fmt_bool_var, ir.PointerType(self.i8_type))
+            true_ptr = self.builder.bitcast(self.str_true_var, ir.PointerType(self.i8_type))
+            false_ptr = self.builder.bitcast(self.str_false_var, ir.PointerType(self.i8_type))
+            selected_str = self.builder.select(exit_val, true_ptr, false_ptr, name="bool_str")
+            self.builder.call(self.printf_fn, [fmt_ptr, selected_str])
         self.builder.ret(ir.Constant(self.i32_type, 0))
 
     def visit_program(self, node: ProgramNode) -> None:
@@ -441,7 +622,10 @@ def parse_ast(source_bytes: bytes) -> ProgramNode:
 
 def compile_source(source_bytes: bytes) -> ir.Module:
     ast = parse_ast(source_bytes)
-    module = ir.Module(name="practice3")
+    checker = SemanticChecker()
+    checker.visit_program(ast)
+
+    module = ir.Module(name="practice4")
     module.triple = llvm.get_default_triple()
 
     codegen = CodeGenVisitor(module)
