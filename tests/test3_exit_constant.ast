@@ -1,5 +1,5 @@
 Program
-  Decl dummy const
+  Decl dummy i32 const
     Const 0
   Exit
     Const 42

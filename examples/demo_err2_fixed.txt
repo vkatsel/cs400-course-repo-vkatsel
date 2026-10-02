@@ -1,0 +1,3 @@
+bool b{true}
+bool c{b == false}
+exit 0

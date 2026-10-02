@@ -38,6 +38,10 @@ class Token:
         return self.kind == "identifier"
 
     @property
+    def is_boolean(self) -> bool:
+        return self.kind == "keyword" and self.subkind == "boolean"
+
+    @property
     def is_number(self) -> bool:
         return self.kind == "constant" and self.subkind == "numeric"
 
@@ -59,12 +63,18 @@ class State(StrEnum):
     IDENT = "IDENT"
     NUMBER = "NUMBER"
     COLON = "COLON"
+    EQUALS = "EQUALS"
+    EXCLAMATION = "EXCLAMATION"
 
 
 KEYWORDS: dict[str, tuple[str, str]] = {
     "i32": ("keyword", "typename"),
+    "i64": ("keyword", "typename"),
+    "bool": ("keyword", "typename"),
     "mut": ("keyword", "specifier"),
     "exit": ("keyword", "statement"),
+    "true": ("keyword", "boolean"),
+    "false": ("keyword", "boolean"),
 }
 
 
@@ -158,6 +168,16 @@ def lex(data: bytes) -> list[list[Token]]:
                         start_line, start_col = line, col
                         i += 1
                         col += 1
+                    case 61:  # '=' (start of '==')
+                        state = State.EQUALS
+                        start_line, start_col = line, col
+                        i += 1
+                        col += 1
+                    case 33:  # '!' (start of '!=')
+                        state = State.EXCLAMATION
+                        start_line, start_col = line, col
+                        i += 1
+                        col += 1
                     case 43 | 45 | 42:  # '+', '-', '*' (operators)
                         tokens.append(Token("operator", chr(b), line, col))
                         i += 1
@@ -204,6 +224,32 @@ def lex(data: bytes) -> list[list[Token]]:
                     col += 1
                 else:
                     raise CompileError(start_line, start_col, "unexpected byte ':'")
+
+            case State.EQUALS:
+                if b == ord("="):
+                    tokens.append(Token("operator", "==", start_line, start_col))
+                    state = State.START
+                    i += 1
+                    col += 1
+                else:
+                    raise CompileError(
+                        start_line,
+                        start_col,
+                        "expected '==' (a single '=' is not an operator)",
+                    )
+
+            case State.EXCLAMATION:
+                if b == ord("="):
+                    tokens.append(Token("operator", "!=", start_line, start_col))
+                    state = State.START
+                    i += 1
+                    col += 1
+                else:
+                    raise CompileError(
+                        start_line,
+                        start_col,
+                        "expected '!=' (a single '!' is not an operator)",
+                    )
 
     if tokens:
         lines.append(tokens)

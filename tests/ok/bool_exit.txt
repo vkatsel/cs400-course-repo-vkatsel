@@ -1,0 +1,2 @@
+bool flag{false}
+exit flag

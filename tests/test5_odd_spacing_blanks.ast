@@ -1,7 +1,7 @@
 Program
-  Decl x const
+  Decl x i32 const
     Const 100
-  Decl y mut
+  Decl y i32 mut
     Const 200
   Assign y
     BinOp -

@@ -5,15 +5,15 @@ import shutil
 import tempfile
 from pathlib import Path
 
+for _p in (
+    "/home/ubuntu/lcd/lib/python3.12/site-packages",
+    str(Path.home() / "lcd/lib/python3.12/site-packages"),
+):
+    if _p not in sys.path and Path(_p).exists():
+        sys.path.insert(0, _p)
+
 def get_python_exe() -> str:
-    try:
-        import llvmlite  # noqa: F401
-        return sys.executable
-    except ImportError:
-        for candidate in ("/home/ubuntu/lcd/bin/python", str(Path.home() / "lcd/bin/python")):
-            if Path(candidate).exists():
-                return candidate
-        return sys.executable
+    return sys.executable
 
 
 def run_ir(out_ll: Path) -> str | None:
@@ -31,6 +31,12 @@ def run_ir(out_ll: Path) -> str | None:
             return bin_res.stdout.strip()
 
     jit_script = f"""
+import sys
+from pathlib import Path
+for _p in ('/home/ubuntu/lcd/lib/python3.12/site-packages', str(Path.home() / 'lcd/lib/python3.12/site-packages')):
+    if _p not in sys.path and Path(_p).exists():
+        sys.path.insert(0, _p)
+
 import llvmlite.binding as llvm
 import ctypes
 
@@ -63,7 +69,12 @@ def main() -> None:
         print(f"Error: compiler.py not found at {compiler_py}", file=sys.stderr)
         sys.exit(1)
 
-    test_files = sorted(list(tests_dir.glob("test*.txt")) + list(tests_dir.glob("fail*.txt")))
+    test_files = sorted(
+        list(tests_dir.glob("test*.txt"))
+        + list(tests_dir.glob("fail*.txt"))
+        + list((tests_dir / "ok").glob("*.txt"))
+        + list((tests_dir / "err").glob("*.txt"))
+    )
     if not test_files:
         print("No test files found.")
         sys.exit(1)
@@ -78,9 +89,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         for test_file in test_files:
             test_name = test_file.stem
-            is_fail_test = test_name.startswith("fail")
+            is_fail_test = test_name.startswith("fail") or test_file.parent.name == "err"
             out_ll = Path(tmpdir) / f"{test_name}.ll"
-            expected_file = tests_dir / f"{test_name}.expected"
+            expected_file = test_file.with_suffix(".expected")
             ast_file = test_file.with_suffix(".ast")
 
             expected_text = expected_file.read_text(encoding="utf-8").strip() if expected_file.exists() else None
