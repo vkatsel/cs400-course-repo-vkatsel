@@ -1,18 +1,3 @@
-"""
-Compiler for Practice 3 Language (Parser, AST, and Tree-walk Code Generation).
-
-EBNF Grammar:
-    program    ::= { statement } exit ;
-    statement  ::= decl | assign ;
-    decl       ::= "i32" [ "mut" ] ident "{" expr "}" ;
-    assign     ::= ident ":=" expr ;
-    exit       ::= "exit" operand ;
-    expr       ::= term { ( "+" | "-" ) term } ;
-    term       ::= factor { "*" factor } ;
-    factor     ::= operand ;
-    operand    ::= ident | number ;
-"""
-
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
