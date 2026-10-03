@@ -1,17 +1,21 @@
-(* Grammar for Practice 4 Language in EBNF *)
+(* Grammar for Practice 5 Language in EBNF *)
 (* Languages and Compilers Design *)
 
 program    ::= { statement } exit ;
 
-statement  ::= decl | assign ;
+statement  ::= decl | assign | if_stmt ;
 
-decl       ::= type [ "mut" ] ident "{" expr "}" ;
+decl       ::= type [ "mut" ] ident "{" expr "}" NL ;
 
 type       ::= "i32" | "i64" | "bool" ;
 
-assign     ::= ident ":=" expr ;
+assign     ::= ident ":=" expr NL ;
 
-exit       ::= "exit" factor ;
+exit       ::= "exit" factor NL ;
+
+if_stmt    ::= "if" expr NL block [ "else" NL block ] ;
+
+block      ::= "{" NL { statement } [ exit ] "}" NL ;
 
 expr       ::= arith [ ( "==" | "!=" ) arith ] ;
 
@@ -19,4 +23,4 @@ arith      ::= term { ( "+" | "-" ) term } ;
 
 term       ::= factor { "*" factor } ;
 
-factor     ::= number | "true" | "false" | ident ;
+factor     ::= number | "true" | "false" | ident | "!" factor ;
