@@ -1,0 +1,10 @@
+bool flag{false}
+if flag
+{
+    exit 10
+}
+else
+{
+    exit 20
+}
+exit 30

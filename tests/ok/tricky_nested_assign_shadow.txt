@@ -1,0 +1,16 @@
+i32 mut outer{10}
+if outer == 10
+{
+    bool mut inner{true}
+    if inner
+    {
+        outer := outer + 15
+        bool mut inner{false}
+        inner := !inner
+        if inner
+        {
+            outer := outer * 2
+        }
+    }
+}
+exit outer

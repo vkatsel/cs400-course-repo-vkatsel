@@ -849,7 +849,7 @@ def compile_source(source_bytes: bytes) -> ir.Module:
     checker = SemanticChecker()
     checker.visit_program(ast)
 
-    module = ir.Module(name="practice4")
+    module = ir.Module(name="practice5")
     module.triple = llvm.get_default_triple()
 
     codegen = CodeGenVisitor(module)
@@ -887,9 +887,9 @@ def main() -> None:
 
     if len(sys.argv) != 3:
         print(
-            "Usage: python3 compiler.py <input.txt> <output.ll> "
-            "OR python3 compiler.py --ast <input.txt> "
-            "OR python3 compiler.py --lex <input.txt>",
+            "Usage: python3 compiler.py <input.txt> <output.ll> \n"
+            "OR python3 compiler.py --ast <input.txt> \n"
+            "OR python3 compiler.py --lex <input.txt> \n",
             file=sys.stderr,
         )
         sys.exit(1)

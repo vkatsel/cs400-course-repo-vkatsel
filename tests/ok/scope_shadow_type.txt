@@ -1,0 +1,14 @@
+i32 mut x{42}
+if true
+{
+    bool x{false}
+    if !x
+    {
+        i64 x{100}
+        if x == 100
+        {
+            bool x{true}
+        }
+    }
+}
+exit x
