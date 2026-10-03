@@ -544,7 +544,17 @@ class Parser:
 
 class SemanticChecker:
     def __init__(self) -> None:
-        self.symbols: dict[str, DeclNode] = {}
+        self.scopes: list[dict[str, DeclNode]] = [{}]
+
+    def lookup(self, node: Node, name: str) -> DeclNode:
+        for frame in reversed(self.scopes):
+            if name in frame:
+                return frame[name]
+        raise CompileError(
+            node.line,
+            node.col,
+            f"variable '{name}' is used before its declaration",
+        )
 
     def visit_const(self, node: ConstNode) -> str:
         if 0 <= node.value <= 2147483647:
@@ -562,14 +572,9 @@ class SemanticChecker:
         return node.type
 
     def visit_var(self, node: VarNode) -> str:
-        if node.name not in self.symbols:
-            raise CompileError(
-                node.line,
-                node.col,
-                f"variable '{node.name}' is used before its declaration",
-            )
-        node.decl = self.symbols[node.name]
-        node.type = node.decl.type_name
+        decl = self.lookup(node, node.name)
+        node.decl = decl
+        node.type = decl.type_name
         return node.type
 
     def visit_binop(self, node: BinOpNode) -> str:
@@ -609,10 +614,12 @@ class SemanticChecker:
             node.else_block.accept(self)
 
     def visit_block(self, node: BlockNode) -> None:
+        self.scopes.append({})
         for stmt in node.statements:
             stmt.accept(self)
         if node.exit is not None:
             node.exit.accept(self)
+        self.scopes.pop()
 
     def check_assignable(
         self, expr: ExprNode, want: str, at: Node, what: str
@@ -633,24 +640,22 @@ class SemanticChecker:
         )
 
     def visit_decl(self, node: DeclNode) -> None:
-        if node.name in self.symbols:
-            raise CompileError(
-                node.line, node.col, f"variable '{node.name}' is already declared"
-            )
+        top_frame = self.scopes[-1]
+        if node.name in top_frame:
+            if len(self.scopes) > 1:
+                msg = f"variable '{node.name}' is already declared in this block"
+            else:
+                msg = f"variable '{node.name}' is already declared"
+            raise CompileError(node.line, node.col, msg)
         node.init.accept(self)
         self.check_assignable(
             node.init, node.type_name, node, f"initialise '{node.name}'"
         )
-        self.symbols[node.name] = node
+        top_frame[node.name] = node
 
     def visit_assign(self, node: AssignNode) -> None:
-        if node.name not in self.symbols:
-            raise CompileError(
-                node.line,
-                node.col,
-                f"variable '{node.name}' is used before its declaration",
-            )
-        node.decl = self.symbols[node.name]
+        decl = self.lookup(node, node.name)
+        node.decl = decl
         if not node.decl.mutable:
             raise CompileError(
                 node.line, node.col, f"cannot assign to '{node.name}': it is not mut"
@@ -686,6 +691,7 @@ class CodeGenVisitor:
         self.main_fn = ir.Function(
             self.module, ir.FunctionType(self.i32_type, []), name="main"
         )
+        self.function = self.main_fn
         self.builder = ir.IRBuilder(self.main_fn.append_basic_block("entry"))
 
         self.printf_fn = ir.Function(
