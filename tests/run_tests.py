@@ -4,6 +4,11 @@ import subprocess
 import shutil
 import tempfile
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 for _p in (
     "/home/ubuntu/lcd/lib/python3.12/site-packages",
@@ -11,6 +16,9 @@ for _p in (
 ):
     if _p not in sys.path and Path(_p).exists():
         sys.path.insert(0, _p)
+
+from compiler import parse_ast, compile_source, CompileError
+
 
 def get_python_exe() -> str:
     return sys.executable
@@ -25,7 +33,10 @@ def run_ir(out_ll: Path) -> str | None:
         with tempfile.TemporaryDirectory() as tmpdir:
             out_o = Path(tmpdir) / "out.o"
             out_bin = Path(tmpdir) / "out.bin"
-            subprocess.run(["llc", "-filetype=obj", "-relocation-model=pic", str(out_ll), "-o", str(out_o)], check=True)
+            subprocess.run(
+                ["llc", "-filetype=obj", "-relocation-model=pic", str(out_ll), "-o", str(out_o)],
+                check=True,
+            )
             subprocess.run(["clang", "-fPIE", str(out_o), "-o", str(out_bin)], check=True)
             bin_res = subprocess.run([str(out_bin)], capture_output=True, text=True)
             return bin_res.stdout.strip()
@@ -60,10 +71,90 @@ cfunc()
         return res.stdout.strip()
     return None
 
+
+def run_single_test(test_file: Path, tmpdir: str) -> tuple[bool, str]:
+    test_name = test_file.stem
+    is_fail_test = test_name.startswith("fail") or test_file.parent.name == "err"
+    expected_file = test_file.with_suffix(".expected")
+    ast_file = test_file.with_suffix(".ast")
+    expected_text = (
+        expected_file.read_text(encoding="utf-8").strip()
+        if expected_file.exists()
+        else None
+    )
+
+    try:
+        content = test_file.read_bytes()
+    except Exception as e:
+        return False, f"❌ FAIL: {test_name} (unable to read file: {e})"
+
+    if is_fail_test:
+        try:
+            compile_source(content)
+            return False, f"❌ FAIL: {test_name} (expected failure, but exited with 0)"
+        except CompileError as e:
+            stderr_out = str(e)
+            if expected_text and expected_text not in stderr_out:
+                msg = (
+                    f"❌ FAIL: {test_name}\n"
+                    f"   Expected stderr: {expected_text}\n"
+                    f"   Actual stderr:   {stderr_out}"
+                )
+                return False, msg
+            return True, f"✅ PASS: {test_name} -> {stderr_out}"
+        except Exception as e:
+            return False, f"❌ FAIL: {test_name} (unexpected crash: {e})"
+    else:
+        if ast_file.exists():
+            try:
+                ast = parse_ast(content)
+                expected_ast = ast_file.read_text(encoding="utf-8").strip()
+                actual_ast = ast.dump().strip()
+                if actual_ast != expected_ast:
+                    msg = (
+                        f"❌ FAIL: {test_name} (AST mismatch)\n"
+                        f"   Expected AST:\n{expected_ast}\n"
+                        f"   Actual AST:\n{actual_ast}"
+                    )
+                    return False, msg
+            except Exception as e:
+                return False, f"❌ FAIL: {test_name} (--ast execution error: {e})"
+
+        try:
+            mod = compile_source(content)
+        except CompileError as e:
+            return False, f"❌ FAIL: {test_name} (compilation error: {e})"
+        except Exception as e:
+            return False, f"❌ FAIL: {test_name} (compiler crash: {e})"
+
+        out_ll = Path(tmpdir) / f"{test_name}.ll"
+        out_ll.write_text(str(mod), encoding="utf-8")
+
+        if not out_ll.exists() or out_ll.stat().st_size == 0:
+            return False, f"❌ FAIL: {test_name} (no IR output generated)"
+
+        actual_output = run_ir(out_ll)
+        if actual_output is not None and expected_text:
+            if actual_output != expected_text:
+                msg = (
+                    f"❌ FAIL: {test_name}\n"
+                    f"   Expected output: {expected_text}\n"
+                    f"   Actual output:   {actual_output}"
+                )
+                return False, msg
+
+        ast_info = " + AST" if ast_file.exists() else ""
+        output_info = (
+            f" (output: '{actual_output}'{ast_info})"
+            if actual_output is not None
+            else f" (IR generated{ast_info})"
+        )
+        return True, f"✅ PASS: {test_name}{output_info}"
+
+
 def main() -> None:
-    repo_root = Path(__file__).resolve().parent.parent
-    compiler_py = repo_root / "compiler.py"
-    tests_dir = repo_root / "tests"
+    compiler_py = REPO_ROOT / "compiler.py"
+    tests_dir = REPO_ROOT / "tests"
 
     if not compiler_py.exists():
         print(f"Error: compiler.py not found at {compiler_py}", file=sys.stderr)
@@ -79,92 +170,25 @@ def main() -> None:
         print("No test files found.")
         sys.exit(1)
 
+    print(f"Running {len(test_files)} tests...\n")
+
+    workers = min(8, (os.cpu_count() or 2) * 2)
     passed = 0
     failed = 0
 
-    print(f"Running {len(test_files)} tests...\n")
-
-    py_exe = get_python_exe()
-
     with tempfile.TemporaryDirectory() as tmpdir:
-        for test_file in test_files:
-            test_name = test_file.stem
-            is_fail_test = test_name.startswith("fail") or test_file.parent.name == "err"
-            out_ll = Path(tmpdir) / f"{test_name}.ll"
-            expected_file = test_file.with_suffix(".expected")
-            ast_file = test_file.with_suffix(".ast")
-
-            expected_text = expected_file.read_text(encoding="utf-8").strip() if expected_file.exists() else None
-
-            # For valid tests, verify AST matches .ast file if present
-            if not is_fail_test and ast_file.exists():
-                ast_res = subprocess.run(
-                    [py_exe, str(compiler_py), "--ast", str(test_file)],
-                    capture_output=True,
-                    text=True,
-                )
-                if ast_res.returncode != 0:
-                    print(f"❌ FAIL: {test_name} (--ast execution error)")
-                    print(f"   stderr: {ast_res.stderr.strip()}")
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for ok, msg in executor.map(lambda tf: run_single_test(tf, tmpdir), test_files):
+                print(msg)
+                if ok:
+                    passed += 1
+                else:
                     failed += 1
-                    continue
-                expected_ast = ast_file.read_text(encoding="utf-8").strip()
-                if ast_res.stdout.strip() != expected_ast:
-                    print(f"❌ FAIL: {test_name} (AST mismatch)")
-                    print(f"   Expected AST:\n{expected_ast}")
-                    print(f"   Actual AST:\n{ast_res.stdout.strip()}")
-                    failed += 1
-                    continue
-
-            res = subprocess.run(
-                [py_exe, str(compiler_py), str(test_file), str(out_ll)],
-                capture_output=True,
-                text=True,
-            )
-
-            if is_fail_test:
-                if res.returncode == 0:
-                    print(f"❌ FAIL: {test_name} (expected failure, but exited with 0)")
-                    failed += 1
-                    continue
-                stderr_out = res.stderr.strip()
-                if expected_text and expected_text not in stderr_out:
-                    print(f"❌ FAIL: {test_name}")
-                    print(f"   Expected stderr: {expected_text}")
-                    print(f"   Actual stderr:   {stderr_out}")
-                    failed += 1
-                    continue
-                print(f"✅ PASS: {test_name} -> {stderr_out}")
-                passed += 1
-            else:
-                if res.returncode != 0:
-                    print(f"❌ FAIL: {test_name} (compilation error)")
-                    print(f"   stderr: {res.stderr.strip()}")
-                    failed += 1
-                    continue
-
-                if not out_ll.exists() or out_ll.stat().st_size == 0:
-                    print(f"❌ FAIL: {test_name} (no IR output generated)")
-                    failed += 1
-                    continue
-
-                actual_output = run_ir(out_ll)
-                if actual_output is not None and expected_text:
-                    if actual_output != expected_text:
-                        print(f"❌ FAIL: {test_name}")
-                        print(f"   Expected output: {expected_text}")
-                        print(f"   Actual output:   {actual_output}")
-                        failed += 1
-                        continue
-
-                ast_info = " + AST" if ast_file.exists() else ""
-                output_info = f" (output: '{actual_output}'{ast_info})" if actual_output is not None else f" (IR generated{ast_info})"
-                print(f"✅ PASS: {test_name}{output_info}")
-                passed += 1
 
     print(f"\nResult: {passed} passed, {failed} failed.")
     if failed > 0:
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,10 @@
+Program
+  Decl count i32 mut
+    Const 42
+  While
+    Bool false
+    Block
+      Assign count
+        Const 0
+  Exit
+    Var count

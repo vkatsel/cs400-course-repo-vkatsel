@@ -181,6 +181,21 @@ class IfNode(StmtNode):
 
 
 @dataclass(slots=True)
+class WhileNode(StmtNode):
+    cond: ExprNode
+    body: BlockNode
+
+    def dump(self, indent: int = 0) -> str:
+        lines = [f"{' ' * (indent * 2)}While"]
+        lines.append(self.cond.dump(indent + 1))
+        lines.append(self.body.dump(indent + 1))
+        return "\n".join(lines)
+
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_while(self)
+
+
+@dataclass(slots=True)
 class ProgramNode(Node):
     statements: list[StmtNode]
     exit: ExitNode
@@ -494,6 +509,23 @@ class Parser:
 
         return IfNode(if_tok.line, if_tok.col, cond, then_block, else_block)
 
+    def parse_while(self) -> WhileNode:
+        while_tok = self.eat()
+        cond = self.parse_expr()
+
+        if (extra := self.peek()) is not None:
+            if extra.text == "{":
+                raise CompileError(
+                    extra.line, extra.col, "unexpected '{' after the statement"
+                )
+            raise CompileError(
+                extra.line, extra.col, f"unexpected '{extra.text}' after the statement"
+            )
+
+        self.next_line()
+        body = self.parse_block(context="after 'while'")
+        return WhileNode(while_tok.line, while_tok.col, cond, body)
+
     def parse_statement(self) -> StmtNode:
         tok = self.peek()
         if tok is None:
@@ -501,6 +533,8 @@ class Parser:
             raise CompileError(line, col, "unexpected end of line")
         if tok.text == "if":
             return self.parse_if()
+        if tok.text == "while":
+            return self.parse_while()
         if tok.text in ("i32", "i64", "bool"):
             node = self.parse_decl()
             self.next_line()
@@ -612,6 +646,14 @@ class SemanticChecker:
         node.then_block.accept(self)
         if node.else_block is not None:
             node.else_block.accept(self)
+
+    def visit_while(self, node: WhileNode) -> None:
+        ct = node.cond.accept(self)
+        if ct != "bool":
+            raise CompileError(
+                node.line, node.col, f"the condition of 'while' must be bool, got {ct}"
+            )
+        node.body.accept(self)
 
     def visit_block(self, node: BlockNode) -> None:
         self.scopes.append({})
@@ -817,6 +859,25 @@ class CodeGenVisitor:
                 self.builder.branch(merge_bb)
 
         self.builder.position_at_end(merge_bb)
+
+    def visit_while(self, node: WhileNode) -> None:
+        cond_bb = self.function.append_basic_block("cond")
+        body_bb = self.function.append_basic_block("body")
+        end_bb = self.function.append_basic_block("end")
+
+        if not self.builder.block.is_terminated:
+            self.builder.branch(cond_bb)
+
+        self.builder.position_at_end(cond_bb)
+        cond_val = node.cond.accept(self)
+        self.builder.cbranch(cond_val, body_bb, end_bb)
+
+        self.builder.position_at_end(body_bb)
+        node.body.accept(self)
+        if not self.builder.block.is_terminated:
+            self.builder.branch(cond_bb)
+
+        self.builder.position_at_end(end_bb)
 
     def visit_exit(self, node: ExitNode) -> None:
         exit_val = node.value.accept(self)

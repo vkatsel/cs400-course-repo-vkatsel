@@ -1,0 +1,5 @@
+while false
+{
+    i32 inner{10}
+}
+exit inner

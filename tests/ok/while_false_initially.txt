@@ -1,0 +1,6 @@
+i32 mut count{42}
+while false
+{
+    count := 0
+}
+exit count

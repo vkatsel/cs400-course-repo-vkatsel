@@ -77,6 +77,7 @@ KEYWORDS: dict[str, tuple[str, str]] = {
     "false": ("keyword", "boolean"),
     "if": ("keyword", "control"),
     "else": ("keyword", "control"),
+    "while": ("keyword", "control"),
 }
 
 
