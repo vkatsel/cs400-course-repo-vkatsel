@@ -1,14 +1,6 @@
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
-
-for _p in (
-    "/home/ubuntu/lcd/lib/python3.12/site-packages",
-    str(Path.home() / "lcd/lib/python3.12/site-packages"),
-):
-    if _p not in sys.path and Path(_p).exists():
-        sys.path.insert(0, _p)
 
 import llvmlite.binding as llvm
 from lexer import CompileError, Token, lex, print_tokens

@@ -753,3 +753,27 @@ Result: 63 passed, 0 failed.
   - [ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt) оновлено та синхронізовано.
 
 ---
+
+User:
+привіт. потрюіно підправити дрібничку з пр: Small thing: compiler.py:6-11 adds /home/ubuntu/lcd/... to sys.path. That is a setting of your machine; keep it in run.sh or the venv, not in the compiler.
+
+Model:
+Готово! 
+
+### Що було зроблено:
+1. **[compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py)**:
+   - Прибрано прив'язку до локальних шляхів (`/home/ubuntu/lcd/...` та маніпуляції з `sys.path`).
+   - Прибрано не використовуваний імпорт `Path`.
+   - Тепер компілятор є чистим і покладається виключно на активне середовище Python / venv.
+
+2. **[run.sh](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/run.sh)**:
+   - Додано перевірку активації віртуального середовища та налаштування `PYTHONPATH` як для локального `.venv`, так і для `$HOME/lcd` та `/home/ubuntu/lcd`.
+
+3. **Тестування**:
+   - Усі **63/63 тестів** успішно пройдено.
+   - Запуск через `./run.sh` перевірено й працює коректно.
+
+4. **Git Commit**:
+   - Створено коміт [`214679c`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel): `refactor(compiler): remove machine-specific sys.path modification and rely on environment`.
+
+---
