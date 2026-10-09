@@ -1,0 +1,9 @@
+Program
+  Decl a i64 const
+    Const 3000000000
+  Decl b i64 const
+    BinOp +
+      Var a
+      Const 10
+  Exit
+    Var b

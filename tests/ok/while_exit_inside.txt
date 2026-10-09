@@ -1,0 +1,10 @@
+i32 mut x{0}
+while true
+{
+    x := x + 10
+    if x == 30
+    {
+        exit x
+    }
+}
+exit 0

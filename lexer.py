@@ -75,6 +75,9 @@ KEYWORDS: dict[str, tuple[str, str]] = {
     "exit": ("keyword", "statement"),
     "true": ("keyword", "boolean"),
     "false": ("keyword", "boolean"),
+    "if": ("keyword", "control"),
+    "else": ("keyword", "control"),
+    "while": ("keyword", "control"),
 }
 
 
@@ -98,7 +101,6 @@ def lex(data: bytes) -> list[list[Token]]:
     line, col = 1, 1
     start_idx, start_line, start_col = 0, 1, 1
 
-    open_brace_loc: tuple[int, int] | None = None
     i = 0
     n = len(data)
 
@@ -112,12 +114,6 @@ def lex(data: bytes) -> list[list[Token]]:
             case State.START:
                 match b:
                     case None:
-                        if open_brace_loc is not None:
-                            raise CompileError(
-                                open_brace_loc[0],
-                                open_brace_loc[1],
-                                "'{' is not closed before the end of the line",
-                            )
                         break
                     case 32 | 9:  # ' ' (space), '\t' (tab)
                         i += 1
@@ -127,12 +123,6 @@ def lex(data: bytes) -> list[list[Token]]:
                         if i < n and data[i] == 10:
                             pass
                     case 10:  # '\n' (newline / end of line)
-                        if open_brace_loc is not None:
-                            raise CompileError(
-                                open_brace_loc[0],
-                                open_brace_loc[1],
-                                "'{' is not closed before the end of the line",
-                            )
                         tokens.append(Token("endline", "\n", line, col))
                         lines.append(tokens)
                         tokens = []
@@ -150,16 +140,10 @@ def lex(data: bytes) -> list[list[Token]]:
                         i += 1
                         col += 1
                     case 123:  # '{' (block start)
-                        if open_brace_loc is not None:
-                            raise CompileError(line, col, "nested '{' is not allowed")
-                        open_brace_loc = (line, col)
                         tokens.append(Token("block", "{", line, col, "start"))
                         i += 1
                         col += 1
                     case 125:  # '}' (block end)
-                        if open_brace_loc is None:
-                            raise CompileError(line, col, "unexpected '}'")
-                        open_brace_loc = None
                         tokens.append(Token("block", "}", line, col, "end"))
                         i += 1
                         col += 1
@@ -245,11 +229,9 @@ def lex(data: bytes) -> list[list[Token]]:
                     i += 1
                     col += 1
                 else:
-                    raise CompileError(
-                        start_line,
-                        start_col,
-                        "expected '!=' (a single '!' is not an operator)",
-                    )
+                    tokens.append(Token("operator", "!", start_line, start_col))
+                    state = State.START
+                    continue
 
     if tokens:
         lines.append(tokens)

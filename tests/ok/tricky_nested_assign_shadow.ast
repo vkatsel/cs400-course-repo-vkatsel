@@ -1,0 +1,31 @@
+Program
+  Decl outer i32 mut
+    Const 10
+  If
+    BinOp ==
+      Var outer
+      Const 10
+    Block
+      Decl inner bool mut
+        Bool true
+      If
+        Var inner
+        Block
+          Assign outer
+            BinOp +
+              Var outer
+              Const 15
+          Decl inner bool mut
+            Bool false
+          Assign inner
+            Not
+              Var inner
+          If
+            Var inner
+            Block
+              Assign outer
+                BinOp *
+                  Var outer
+                  Const 2
+  Exit
+    Var outer
