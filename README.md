@@ -7,15 +7,21 @@ Compiler implementation for Languages and Compilers Design (CS400).
 ```text
 .
 ├── compiler.py        # Main compiler entry point (parser, AST, code generation)
+├── lexer.py           # Lexer and token definitions
 ├── grammar.ebnf       # Formal EBNF grammar definition
-├── examples/          # Example source programs and token dumps
+├── run.sh             # Convenience script to compile and run in one step
+├── examples/          # Example source programs and manual test cases
+│   ├── practice6_demo.txt
 │   ├── worked_example.txt
-│   └── worked_example.tokens
-├── tests/             # Test cases and expected outputs
-│   ├── run_tests.py   # Automated test runner
-│   ├── *.txt          # Source test programs
-│   ├── *.expected     # Expected outputs / error messages
-│   └── *.ast          # Reference AST dumps for valid programs
+│   └── ...
+├── tests/             # Automated test suite
+│   ├── run_tests.py   # Test runner executing all tests
+│   ├── test_lexer.py  # Unit tests for the lexer
+│   ├── ok/            # Valid programs expecting 0 exit and specific stdout
+│   │   ├── *.txt, *.expected, *.ast
+│   ├── err/           # Invalid programs expecting compilation errors
+│   │   ├── *.txt, *.expected
+│   └── fail*.txt      # Legacy top-level error tests
 ├── ai_usage.txt       # AI usage log for course submissions
 ├── README.md          # Project documentation
 └── .gitignore         # Git ignore rules
@@ -45,6 +51,12 @@ Print the Abstract Syntax Tree (AST):
 
 ```bash
 python3 compiler.py --ast input.txt
+```
+
+Print tokenized output (Lexer):
+
+```bash
+python3 compiler.py --lex input.txt
 ```
 
 ### Executing the Compiled IR

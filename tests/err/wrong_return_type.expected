@@ -1,0 +1,1 @@
+cannot return 'i32' from function 'get_flag' with return type 'bool'

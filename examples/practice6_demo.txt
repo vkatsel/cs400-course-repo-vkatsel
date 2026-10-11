@@ -1,0 +1,31 @@
+struct Vector
+{
+    i64 mut x
+    i64 mut y
+}
+struct Transform
+{
+    Vector mut offset
+    i32 mut scale
+}
+struct Entity
+{
+    Transform mut transform
+    bool mut is_active
+}
+fn scale_vector := (Vector v, i32 factor) -> Vector
+{
+    Vector res{v.x * factor, v.y * factor}
+    exit res
+}
+Vector v{10, 20}
+Transform t{v, 2}
+Entity mut player{t, true}
+i64 orig_x{player.transform.offset.x}
+player.transform.offset.x := orig_x + 5
+player.transform.offset.y := player.transform.offset.y + 15
+Vector scaled{scale_vector(player.transform.offset, player.transform.scale)}
+player.transform.offset.x := player.transform.offset.x + scaled.x
+player.transform.offset.y := player.transform.offset.y + scaled.y
+i64 final_result{player.transform.offset.x + player.transform.offset.y}
+exit final_result
