@@ -60,6 +60,37 @@ class VarNode(ExprNode):
 
 
 @dataclass(slots=True)
+class FieldAccessNode(ExprNode):
+    obj_name: str
+    fields: list[str]
+    decl: "DeclNode | None" = field(default=None, init=False)
+    field_indices: list[int] = field(default_factory=list, init=False)
+
+    def dump(self, indent: int = 0) -> str:
+        chain = ".".join([self.obj_name, *self.fields])
+        return f"{' ' * (indent * 2)}Field {chain}"
+
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_field_access(self)
+
+
+@dataclass(slots=True)
+class StructLiteralNode(ExprNode):
+    inits: list[ExprNode]
+
+    def dump(self, indent: int = 0) -> str:
+        prefix = " " * (indent * 2)
+        lines = [f"{prefix}StructLiteral"]
+        for expr in self.inits:
+            lines.append(expr.dump(indent + 1))
+        return "\n".join(lines)
+
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_struct_literal(self)
+
+
+
+@dataclass(slots=True)
 class CallNode(ExprNode):
     func_name: str
     args: list[ExprNode]
@@ -200,6 +231,24 @@ class AssignNode(StmtNode):
 
     def accept(self, visitor: Any) -> Any:
         return visitor.visit_assign(self)
+
+
+@dataclass(slots=True)
+class FieldAssignNode(StmtNode):
+    obj_name: str
+    fields: list[str]
+    value: ExprNode
+    decl: "DeclNode | None" = field(default=None, init=False)
+    field_indices: list[int] = field(default_factory=list, init=False)
+    target_type: str | None = field(default=None, init=False)
+
+    def dump(self, indent: int = 0) -> str:
+        prefix = " " * (indent * 2)
+        chain = ".".join([self.obj_name, *self.fields])
+        return f"{prefix}FieldAssign {chain}\n{self.value.dump(indent + 1)}"
+
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_field_assign(self)
 
 
 @dataclass(slots=True)
@@ -383,6 +432,25 @@ class Parser:
                     raise CompileError(close_paren.line, close_paren.col, "expected ')'")
                 self.eat()
                 return CallNode(id_tok.line, id_tok.col, id_tok.text, args)
+
+            fields: list[str] = []
+            while self.peek() is not None and self.peek().text == ".":
+                dot_tok = self.eat()
+                field_tok = self.peek()
+                if field_tok is None:
+                    line, col = self._end_of_line_loc()
+                    raise CompileError(line, col, "expected field name after '.', found end of line")
+                if not field_tok.is_identifier:
+                    raise CompileError(
+                        field_tok.line,
+                        field_tok.col,
+                        f"expected field name after '.', got '{field_tok.text}'",
+                    )
+                self.eat()
+                fields.append(field_tok.text)
+
+            if fields:
+                return FieldAccessNode(id_tok.line, id_tok.col, id_tok.text, fields)
             return VarNode(id_tok.line, id_tok.col, id_tok.text)
         raise CompileError(
             tok.line, tok.col, f"expected a constant or a variable, got '{tok.text}'"
@@ -461,12 +529,30 @@ class Parser:
             )
         self.eat()
 
-        inits: list[ExprNode] = [self.parse_expr()]
+        def parse_init_item() -> ExprNode:
+            item_tok = self.peek()
+            if item_tok is not None and item_tok.text == "{":
+                open_b = self.eat()
+                inner_inits: list[ExprNode] = [parse_init_item()]
+                while self.peek() is not None and self.peek().text == ",":
+                    self.eat()
+                    inner_inits.append(parse_init_item())
+                close_b = self.peek()
+                if close_b is None or close_b.text != "}":
+                    if close_b is None:
+                        line, col = self._end_of_line_loc()
+                        raise CompileError(line, col, "expected '}', found end of line")
+                    raise CompileError(close_b.line, close_b.col, "expected '}'")
+                self.eat()
+                return StructLiteralNode(open_b.line, open_b.col, inner_inits)
+            return self.parse_expr()
+
+        inits: list[ExprNode] = [parse_init_item()]
         while True:
             tok = self.peek()
             if tok is not None and tok.text == ",":
                 self.eat()
-                inits.append(self.parse_expr())
+                inits.append(parse_init_item())
             else:
                 break
 
@@ -487,19 +573,36 @@ class Parser:
             name_tok.line, name_tok.col, name_tok.text, type_name, mutable, inits
         )
 
-    def parse_assign(self) -> AssignNode:
+    def parse_assign(self) -> AssignNode | FieldAssignNode:
         name_tok = self.eat()
+        fields: list[str] = []
+        while self.peek() is not None and self.peek().text == ".":
+            dot_tok = self.eat()
+            field_tok = self.peek()
+            if field_tok is None:
+                line, col = self._end_of_line_loc()
+                raise CompileError(line, col, "expected field name after '.', found end of line")
+            if not field_tok.is_identifier:
+                raise CompileError(
+                    field_tok.line,
+                    field_tok.col,
+                    f"expected field name after '.', got '{field_tok.text}'",
+                )
+            self.eat()
+            fields.append(field_tok.text)
+
         assign_op = self.peek()
+        target_name = name_tok.text if not fields else f"{name_tok.text}.{'.'.join(fields)}"
         if assign_op is None:
             line, col = self._end_of_line_loc()
             raise CompileError(
-                line, col, f"expected ':=' after '{name_tok.text}', found end of line"
+                line, col, f"expected ':=' after '{target_name}', found end of line"
             )
         if assign_op.text != ":=":
             raise CompileError(
                 assign_op.line,
                 assign_op.col,
-                f"expected ':=' after '{name_tok.text}', got '{assign_op.text}'",
+                f"expected ':=' after '{target_name}', got '{assign_op.text}'",
             )
         self.eat()
 
@@ -510,6 +613,8 @@ class Parser:
                 extra.line, extra.col, f"unexpected '{extra.text}' after the statement"
             )
 
+        if fields:
+            return FieldAssignNode(name_tok.line, name_tok.col, name_tok.text, fields, value_expr)
         return AssignNode(name_tok.line, name_tok.col, name_tok.text, value_expr)
 
     def parse_exit(self) -> ExitNode:
@@ -1088,6 +1193,34 @@ class SemanticChecker:
         node.type = decl.type_name
         return node.type
 
+    def visit_field_access(self, node: FieldAccessNode) -> str:
+        decl = self.lookup(node, node.obj_name)
+        node.decl = decl
+        curr_type = decl.type_name
+        indices: list[int] = []
+
+        for field_name in node.fields:
+            if curr_type not in self.structs:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"type '{curr_type}' is not a struct, cannot access field '{field_name}'",
+                )
+            st_info = self.structs[curr_type]
+            if field_name not in st_info.fields_by_name:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"struct '{curr_type}' has no field '{field_name}'",
+                )
+            f_info = st_info.fields_by_name[field_name]
+            indices.append(f_info.index)
+            curr_type = f_info.type_name
+
+        node.field_indices = indices
+        node.type = curr_type
+        return node.type
+
     def visit_binop(self, node: BinOpNode) -> str:
         lt = node.left.accept(self)
         rt = node.right.accept(self)
@@ -1186,7 +1319,7 @@ class SemanticChecker:
             )
         else:
             s_info = self.structs[node.type_name]
-            if len(node.inits) == 1:
+            if len(node.inits) == 1 and not isinstance(node.inits[0], StructLiteralNode):
                 init_type = node.inits[0].accept(self)
                 if init_type == node.type_name:
                     pass
@@ -1212,12 +1345,49 @@ class SemanticChecker:
                         f"wrong number of values in {{}} for '{node.type_name}': expected {len(s_info.fields)}, got {len(node.inits)}",
                     )
                 for expr, f in zip(node.inits, s_info.fields):
-                    expr.accept(self)
-                    self.check_assignable(
-                        expr, f.type_name, expr, f"initialise field '{f.name}'"
-                    )
+                    if isinstance(expr, StructLiteralNode):
+                        if f.type_name not in self.structs:
+                            raise CompileError(
+                                expr.line,
+                                expr.col,
+                                f"cannot initialise built-in field '{f.name}' of type {f.type_name} with {{}}",
+                            )
+                        self._check_struct_literal(expr, f.type_name)
+                    else:
+                        expr.accept(self)
+                        self.check_assignable(
+                            expr, f.type_name, expr, f"initialise field '{f.name}'"
+                        )
 
         top_frame[node.name] = node
+
+    def _check_struct_literal(self, lit: StructLiteralNode, target_struct_name: str) -> None:
+        lit.type = target_struct_name
+        s_info = self.structs[target_struct_name]
+        if len(lit.inits) != len(s_info.fields):
+            raise CompileError(
+                lit.line,
+                lit.col,
+                f"wrong number of values in {{}} for '{target_struct_name}': expected {len(s_info.fields)}, got {len(lit.inits)}",
+            )
+        for expr, f in zip(lit.inits, s_info.fields):
+            if isinstance(expr, StructLiteralNode):
+                if f.type_name not in self.structs:
+                    raise CompileError(
+                        expr.line,
+                        expr.col,
+                        f"cannot initialise built-in field '{f.name}' of type {f.type_name} with {{}}",
+                    )
+                self._check_struct_literal(expr, f.type_name)
+            else:
+                expr.accept(self)
+                self.check_assignable(
+                    expr, f.type_name, expr, f"initialise field '{f.name}'"
+                )
+
+    def visit_struct_literal(self, node: StructLiteralNode) -> str:
+        assert node.type is not None
+        return node.type
 
     def visit_assign(self, node: AssignNode) -> None:
         decl = self.lookup(node, node.name)
@@ -1243,6 +1413,67 @@ class SemanticChecker:
         else:
             self.check_assignable(
                 node.value, node.decl.type_name, node, f"assign to '{node.name}'"
+            )
+
+    def visit_field_assign(self, node: FieldAssignNode) -> None:
+        decl = self.lookup(node, node.obj_name)
+        node.decl = decl
+        chain_str = f"{node.obj_name}.{'.'.join(node.fields)}"
+
+        if not decl.mutable:
+            raise CompileError(
+                node.line,
+                node.col,
+                f"cannot assign to '{chain_str}': '{node.obj_name}' is not mut",
+            )
+
+        curr_type = decl.type_name
+        indices: list[int] = []
+
+        for field_name in node.fields:
+            if curr_type not in self.structs:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"type '{curr_type}' is not a struct, cannot access field '{field_name}'",
+                )
+            st_info = self.structs[curr_type]
+            if field_name not in st_info.fields_by_name:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"struct '{curr_type}' has no field '{field_name}'",
+                )
+            f_info = st_info.fields_by_name[field_name]
+            if not f_info.mutable:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"cannot assign to '{chain_str}': field '{field_name}' is not mut",
+                )
+            indices.append(f_info.index)
+            curr_type = f_info.type_name
+
+        node.field_indices = indices
+        node.target_type = curr_type
+
+        node.value.accept(self)
+        if curr_type in self.structs:
+            if node.value.type != curr_type:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"cannot assign to '{chain_str}' of type {curr_type} with a value of type {node.value.type}",
+                )
+            if not self.is_deeply_mutable(curr_type):
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"cannot replace whole struct '{chain_str}': not all fields are mut",
+                )
+        else:
+            self.check_assignable(
+                node.value, curr_type, node, f"assign to '{chain_str}'"
             )
 
     def visit_call(self, node: CallNode) -> str:
@@ -1411,6 +1642,21 @@ class CodeGenVisitor:
         assert node.decl is not None and node.decl.alloca is not None
         return self.builder.load(node.decl.alloca, name=node.name)
 
+    def visit_field_access(self, node: FieldAccessNode) -> ir.Value:
+        assert node.decl is not None and node.decl.alloca is not None
+        ptr = node.decl.alloca
+        for idx in node.field_indices:
+            ptr = self.builder.gep(
+                ptr,
+                [
+                    ir.Constant(self.i32_type, 0),
+                    ir.Constant(self.i32_type, idx),
+                ],
+                inbounds=True,
+                name="field_gep",
+            )
+        return self.builder.load(ptr, name="field_val")
+
     def visit_binop(self, node: BinOpNode) -> ir.Value:
         left_val = node.left.accept(self)
         right_val = node.right.accept(self)
@@ -1442,6 +1688,21 @@ class CodeGenVisitor:
     def visit_not(self, node: NotNode) -> ir.Value:
         val = node.expr.accept(self)
         return self.builder.not_(val, name="not")
+
+    def visit_struct_literal(self, node: StructLiteralNode) -> ir.Value:
+        st = self.struct_types[node.type]
+        agg_val: ir.Value = ir.Constant(st, ir.Undefined)
+        for idx, expr in enumerate(node.inits):
+            val = expr.accept(self)
+            target_type = st.elements[idx]
+            if (
+                isinstance(target_type, ir.IntType)
+                and target_type.width == 64
+                and expr.type == "i32"
+            ):
+                val = self.builder.sext(val, self.i64_type, name="wide")
+            agg_val = self.builder.insert_value(agg_val, val, idx, name=f"ins_{idx}")
+        return agg_val
 
     def visit_decl(self, node: DeclNode) -> None:
         llvm_t = self._llvm_type(node.type_name)
@@ -1485,6 +1746,24 @@ class CodeGenVisitor:
         if node.decl.type_name in ("i32", "i64"):
             val = self.coerce(val, node.value.type, node.decl.type_name)
         self.builder.store(val, node.decl.alloca)
+
+    def visit_field_assign(self, node: FieldAssignNode) -> None:
+        assert node.decl is not None and node.decl.alloca is not None
+        ptr = node.decl.alloca
+        for idx in node.field_indices:
+            ptr = self.builder.gep(
+                ptr,
+                [
+                    ir.Constant(self.i32_type, 0),
+                    ir.Constant(self.i32_type, idx),
+                ],
+                inbounds=True,
+                name="field_gep",
+            )
+        val = node.value.accept(self)
+        if node.target_type in ("i32", "i64"):
+            val = self.coerce(val, node.value.type, node.target_type)
+        self.builder.store(val, ptr)
 
     def visit_block(self, node: BlockNode) -> None:
         for stmt in node.statements:
