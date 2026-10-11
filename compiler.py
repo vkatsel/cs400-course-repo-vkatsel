@@ -60,6 +60,22 @@ class VarNode(ExprNode):
 
 
 @dataclass(slots=True)
+class CallNode(ExprNode):
+    func_name: str
+    args: list[ExprNode]
+
+    def dump(self, indent: int = 0) -> str:
+        prefix = " " * (indent * 2)
+        lines = [f"{prefix}Call {self.func_name}"]
+        for a in self.args:
+            lines.append(a.dump(indent + 1))
+        return "\n".join(lines)
+
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_call(self)
+
+
+@dataclass(slots=True)
 class BinOpNode(ExprNode):
     op: str
     left: ExprNode
@@ -113,6 +129,34 @@ class StructDefNode(Node):
 
     def accept(self, visitor: Any) -> Any:
         return visitor.visit_struct_def(self)
+
+
+@dataclass(slots=True)
+class ParamDef:
+    name: str
+    type_name: str
+    line: int
+    col: int
+    alloca: ir.AllocaInstr | None = field(default=None, init=False)
+    decl: "DeclNode | None" = field(default=None, init=False)
+
+
+@dataclass(slots=True)
+class FnDefNode(Node):
+    name: str
+    params: list[ParamDef]
+    return_type: str
+    body: "BlockNode"
+
+    def dump(self, indent: int = 0) -> str:
+        prefix = " " * (indent * 2)
+        params_str = ", ".join(f"{p.type_name} {p.name}" for p in self.params)
+        lines = [f"{prefix}Fn {self.name}({params_str}) -> {self.return_type}"]
+        lines.append(self.body.dump(indent + 1))
+        return "\n".join(lines)
+
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_fn_def(self)
 
 
 @dataclass(slots=True)
@@ -223,6 +267,7 @@ class WhileNode(StmtNode):
 @dataclass(slots=True)
 class ProgramNode(Node):
     struct_defs: list[StructDefNode]
+    fn_defs: list[FnDefNode]
     statements: list[StmtNode]
     exit: ExitNode
 
@@ -230,6 +275,8 @@ class ProgramNode(Node):
         lines = ["Program"]
         for s in self.struct_defs:
             lines.append(s.dump(indent + 1))
+        for fn in self.fn_defs:
+            lines.append(fn.dump(indent + 1))
         for stmt in self.statements:
             lines.append(stmt.dump(indent + 1))
         lines.append(self.exit.dump(indent + 1))
@@ -305,6 +352,8 @@ class Parser:
             raise CompileError(
                 line, col, "expected a constant or a variable, found end of line"
             )
+        if tok.text in ("(", ")"):
+            raise CompileError(tok.line, tok.col, f"unexpected byte '{tok.text}'")
         if tok.is_operator and tok.text == "!":
             op_tok = self.eat()
             operand = self.parse_factor()
@@ -316,8 +365,25 @@ class Parser:
             self.eat()
             return BoolNode(tok.line, tok.col, tok.text == "true")
         if tok.is_identifier:
-            self.eat()
-            return VarNode(tok.line, tok.col, tok.text)
+            id_tok = self.eat()
+            next_tok = self.peek()
+            if next_tok is not None and next_tok.text == "(":
+                self.eat()
+                args: list[ExprNode] = []
+                if self.peek() is not None and self.peek().text != ")":
+                    args.append(self.parse_expr())
+                    while self.peek() is not None and self.peek().text == ",":
+                        self.eat()
+                        args.append(self.parse_expr())
+                close_paren = self.peek()
+                if close_paren is None or close_paren.text != ")":
+                    if close_paren is None:
+                        line, col = self._end_of_line_loc()
+                        raise CompileError(line, col, "expected ')', found end of line")
+                    raise CompileError(close_paren.line, close_paren.col, "expected ')'")
+                self.eat()
+                return CallNode(id_tok.line, id_tok.col, id_tok.text, args)
+            return VarNode(id_tok.line, id_tok.col, id_tok.text)
         raise CompileError(
             tok.line, tok.col, f"expected a constant or a variable, got '{tok.text}'"
         )
@@ -670,6 +736,145 @@ class Parser:
 
         return StructDefNode(name_tok.line, name_tok.col, name_tok.text, fields)
 
+    def parse_fn_def(self) -> FnDefNode:
+        line = self.current_line()
+        assert line is not None
+        fn_tok = self.eat()
+
+        name_tok = self.peek()
+        if name_tok is None:
+            line_no, col = self._end_of_line_loc()
+            raise CompileError(line_no, col, "expected function name, found end of line")
+        if not name_tok.is_identifier:
+            raise CompileError(
+                name_tok.line,
+                name_tok.col,
+                f"expected function name, got '{name_tok.text}'",
+            )
+        self.eat()
+
+        assign_tok = self.peek()
+        if assign_tok is None:
+            line_no, col = self._end_of_line_loc()
+            raise CompileError(line_no, col, "expected ':=' after function name, found end of line")
+        if assign_tok.text != ":=":
+            raise CompileError(
+                assign_tok.line,
+                assign_tok.col,
+                f"expected ':=' after function name, got '{assign_tok.text}'",
+            )
+        self.eat()
+
+        open_paren = self.peek()
+        if open_paren is None:
+            line_no, col = self._end_of_line_loc()
+            raise CompileError(line_no, col, "expected '(' after ':=', found end of line")
+        if open_paren.text != "(":
+            raise CompileError(
+                open_paren.line,
+                open_paren.col,
+                f"expected '(' after ':=', got '{open_paren.text}'",
+            )
+        self.eat()
+
+        params: list[ParamDef] = []
+        param_names: set[str] = set()
+
+        if self.peek() is not None and self.peek().text != ")":
+            while True:
+                type_tok = self.peek()
+                if type_tok is None:
+                    line_no, col = self._end_of_line_loc()
+                    raise CompileError(line_no, col, "expected parameter type, found end of line")
+                if not (type_tok.text in ("i32", "i64", "bool") or type_tok.is_identifier):
+                    raise CompileError(
+                        type_tok.line,
+                        type_tok.col,
+                        f"expected parameter type, got '{type_tok.text}'",
+                    )
+                self.eat()
+
+                pname_tok = self.peek()
+                if pname_tok is None:
+                    line_no, col = self._end_of_line_loc()
+                    raise CompileError(line_no, col, "expected parameter name, found end of line")
+                if not pname_tok.is_identifier:
+                    raise CompileError(
+                        pname_tok.line,
+                        pname_tok.col,
+                        f"expected parameter name, got '{pname_tok.text}'",
+                    )
+                self.eat()
+
+                if pname_tok.text in param_names:
+                    raise CompileError(
+                        pname_tok.line,
+                        pname_tok.col,
+                        f"parameter '{pname_tok.text}' is already declared",
+                    )
+                param_names.add(pname_tok.text)
+                params.append(
+                    ParamDef(pname_tok.text, type_tok.text, pname_tok.line, pname_tok.col)
+                )
+
+                if self.peek() is not None and self.peek().text == ",":
+                    self.eat()
+                else:
+                    break
+
+        close_paren = self.peek()
+        if close_paren is None:
+            line_no, col = self._end_of_line_loc()
+            raise CompileError(line_no, col, "expected ')' after parameter list, found end of line")
+        if close_paren.text != ")":
+            raise CompileError(
+                close_paren.line,
+                close_paren.col,
+                f"expected ')' after parameter list, got '{close_paren.text}'",
+            )
+        self.eat()
+
+        arrow = self.peek()
+        if arrow is None:
+            line_no, col = self._end_of_line_loc()
+            raise CompileError(line_no, col, "expected '->' after parameter list, found end of line")
+        if arrow.text != "->":
+            raise CompileError(
+                arrow.line,
+                arrow.col,
+                f"expected '->' after parameter list, got '{arrow.text}'",
+            )
+        self.eat()
+
+        ret_type_tok = self.peek()
+        if ret_type_tok is None:
+            line_no, col = self._end_of_line_loc()
+            raise CompileError(line_no, col, "expected return type, found end of line")
+        if not (ret_type_tok.text in ("i32", "i64", "bool") or ret_type_tok.is_identifier):
+            raise CompileError(
+                ret_type_tok.line,
+                ret_type_tok.col,
+                f"expected return type, got '{ret_type_tok.text}'",
+            )
+        self.eat()
+        ret_type = ret_type_tok.text
+
+        if (extra := self.peek()) is not None:
+            raise CompileError(
+                extra.line, extra.col, f"unexpected '{extra.text}' after function signature"
+            )
+
+        self.next_line()
+        body = self.parse_block(context="after function signature")
+        if body.exit is None:
+            raise CompileError(
+                body.line,
+                body.col,
+                f"function '{name_tok.text}' must end with an exit statement",
+            )
+
+        return FnDefNode(name_tok.line, name_tok.col, name_tok.text, params, ret_type, body)
+
     def parse_statement(self) -> StmtNode:
         tok = self.peek()
         if tok is None:
@@ -699,6 +904,8 @@ class Parser:
             raise CompileError(tok.line, tok.col, "'else' without an 'if'")
         if tok.text == "struct":
             raise CompileError(tok.line, tok.col, "struct declaration after statement")
+        if tok.text == "fn":
+            raise CompileError(tok.line, tok.col, "function declaration after statement")
         raise CompileError(
             tok.line, tok.col, f"cannot start a statement with '{tok.text}'"
         )
@@ -716,6 +923,20 @@ class Parser:
                 s_def = self.parse_struct_def()
                 struct_defs.append(s_def)
                 self.known_structs.add(s_def.name)
+            else:
+                break
+
+        fn_defs: list[FnDefNode] = []
+        while self.current_line() is not None:
+            line = self.current_line()
+            first_tok = line[0]
+            if first_tok.text == "fn":
+                fn_node = self.parse_fn_def()
+                fn_defs.append(fn_node)
+            elif first_tok.text == "struct":
+                raise CompileError(
+                    first_tok.line, first_tok.col, "struct declaration after function"
+                )
             else:
                 break
 
@@ -740,7 +961,7 @@ class Parser:
         if exit_node is None:
             raise CompileError(last_line_number, 1, "missing exit statement")
 
-        return ProgramNode(1, 1, struct_defs, stmts, exit_node)
+        return ProgramNode(1, 1, struct_defs, fn_defs, stmts, exit_node)
 
 
 @dataclass(slots=True)
@@ -762,10 +983,21 @@ class StructInfo:
     col: int
 
 
+@dataclass(slots=True)
+class FnInfo:
+    name: str
+    params: list[ParamDef]
+    return_type: str
+    line: int
+    col: int
+
+
 class SemanticChecker:
     def __init__(self) -> None:
         self.scopes: list[dict[str, DeclNode]] = [{}]
         self.structs: dict[str, StructInfo] = {}
+        self.functions: dict[str, FnInfo] = {}
+        self.current_fn: FnInfo | None = None
 
     def lookup(self, node: Node, name: str) -> DeclNode:
         for frame in reversed(self.scopes):
@@ -1013,18 +1245,91 @@ class SemanticChecker:
                 node.value, node.decl.type_name, node, f"assign to '{node.name}'"
             )
 
+    def visit_call(self, node: CallNode) -> str:
+        if node.func_name not in self.functions:
+            raise CompileError(
+                node.line, node.col, f"unknown function '{node.func_name}'"
+            )
+        fn_info = self.functions[node.func_name]
+        if len(node.args) != len(fn_info.params):
+            raise CompileError(
+                node.line,
+                node.col,
+                f"wrong number of arguments for '{node.func_name}': expected {len(fn_info.params)}, got {len(node.args)}",
+            )
+        for arg, param in zip(node.args, fn_info.params):
+            arg.accept(self)
+            self.check_assignable(
+                arg,
+                param.type_name,
+                arg,
+                f"pass argument to parameter '{param.name}'",
+            )
+        node.type = fn_info.return_type
+        return node.type
+
     def visit_exit(self, node: ExitNode) -> None:
         val_type = node.value.accept(self)
-        if val_type not in ("i32", "i64", "bool"):
-            raise CompileError(
-                node.value.line,
-                node.value.col,
-                f"unsupported exit type '{val_type}'",
-            )
+        if self.current_fn is not None:
+            want = self.current_fn.return_type
+            if not (val_type == want or (want == "i64" and val_type == "i32")):
+                raise CompileError(
+                    node.value.line,
+                    node.value.col,
+                    f"cannot return '{val_type}' from function '{self.current_fn.name}' with return type '{want}'",
+                )
+        else:
+            if val_type not in ("i32", "i64", "bool"):
+                raise CompileError(
+                    node.value.line,
+                    node.value.col,
+                    f"unsupported exit type '{val_type}'",
+                )
 
     def visit_program(self, node: ProgramNode) -> None:
         for s in node.struct_defs:
             s.accept(self)
+
+        for fn in node.fn_defs:
+            if fn.name in ("i32", "i64", "bool"):
+                raise CompileError(
+                    fn.line, fn.col, f"cannot name function with built-in type '{fn.name}'"
+                )
+            if fn.name in self.functions:
+                raise CompileError(
+                    fn.line, fn.col, f"function '{fn.name}' is already declared"
+                )
+            if fn.name in self.structs:
+                raise CompileError(
+                    fn.line, fn.col, f"function '{fn.name}' clashes with struct '{fn.name}'"
+                )
+            if fn.return_type not in ("i32", "i64", "bool") and fn.return_type not in self.structs:
+                raise CompileError(
+                    fn.line, fn.col, f"unknown return type '{fn.return_type}' in function '{fn.name}'"
+                )
+            for p in fn.params:
+                if p.type_name not in ("i32", "i64", "bool") and p.type_name not in self.structs:
+                    raise CompileError(
+                        p.line, p.col, f"unknown parameter type '{p.type_name}' in function '{fn.name}'"
+                    )
+            self.functions[fn.name] = FnInfo(
+                fn.name, fn.params, fn.return_type, fn.line, fn.col
+            )
+
+        for fn in node.fn_defs:
+            fn_info = self.functions[fn.name]
+            saved_scopes = self.scopes
+            self.scopes = [{}]
+            for p in fn.params:
+                decl = DeclNode(p.line, p.col, p.name, p.type_name, mutable=False, inits=[])
+                p.decl = decl
+                self.scopes[0][p.name] = decl
+
+            self.current_fn = fn_info
+            fn.body.accept(self)
+            self.current_fn = None
+            self.scopes = saved_scopes
+
         for stmt in node.statements:
             stmt.accept(self)
         node.exit.accept(self)
@@ -1038,6 +1343,8 @@ class CodeGenVisitor:
         self.i1_type = ir.IntType(1)
         self.i8_type = ir.IntType(8)
         self.struct_types: dict[str, ir.IdentifiedStructType] = {}
+        self.fn_map: dict[str, ir.Function] = {}
+        self.current_user_fn: FnDefNode | None = None
 
         self.main_fn = ir.Function(
             self.module, ir.FunctionType(self.i32_type, []), name="main"
@@ -1227,8 +1534,25 @@ class CodeGenVisitor:
 
         self.builder.position_at_end(end_bb)
 
+    def visit_call(self, node: CallNode) -> ir.Value:
+        callee = self.fn_map[node.func_name]
+        arg_vals: list[ir.Value] = []
+        for arg, param_type in zip(node.args, callee.function_type.args):
+            val = arg.accept(self)
+            if isinstance(param_type, ir.IntType) and param_type.width == 64 and arg.type == "i32":
+                val = self.builder.sext(val, self.i64_type, name="wide")
+            arg_vals.append(val)
+        return self.builder.call(callee, arg_vals, name=f"call_{node.func_name}")
+
     def visit_exit(self, node: ExitNode) -> None:
         exit_val = node.value.accept(self)
+        if self.current_user_fn is not None:
+            ret_type = self.current_user_fn.return_type
+            if ret_type == "i64" and node.value.type == "i32":
+                exit_val = self.builder.sext(exit_val, self.i64_type, name="wide")
+            self.builder.ret(exit_val)
+            return
+
         val_type = node.value.type
         if val_type in ("i32", "i64"):
             wide_val = self.coerce(exit_val, val_type, "i64")
@@ -1245,6 +1569,35 @@ class CodeGenVisitor:
     def visit_program(self, node: ProgramNode) -> None:
         for s in node.struct_defs:
             s.accept(self)
+
+        for fn in node.fn_defs:
+            param_types = [self._llvm_type(p.type_name) for p in fn.params]
+            ret_type = self._llvm_type(fn.return_type)
+            fn_type = ir.FunctionType(ret_type, param_types)
+            llvm_fn = ir.Function(self.module, fn_type, name=f"user_{fn.name}")
+            self.fn_map[fn.name] = llvm_fn
+
+        saved_builder = self.builder
+        saved_function = self.function
+
+        for fn in node.fn_defs:
+            llvm_fn = self.fn_map[fn.name]
+            self.function = llvm_fn
+            self.builder = ir.IRBuilder(llvm_fn.append_basic_block("entry"))
+            self.current_user_fn = fn
+
+            for param, arg in zip(fn.params, llvm_fn.args):
+                arg.name = param.name
+                param_slot = self.builder.alloca(arg.type, name=f"{param.name}_slot")
+                self.builder.store(arg, param_slot)
+                param.decl.alloca = param_slot
+
+            fn.body.accept(self)
+
+        self.current_user_fn = None
+        self.builder = saved_builder
+        self.function = saved_function
+
         for stmt in node.statements:
             stmt.accept(self)
         node.exit.accept(self)

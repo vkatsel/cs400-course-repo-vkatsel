@@ -79,6 +79,7 @@ KEYWORDS: dict[str, tuple[str, str]] = {
     "else": ("keyword", "control"),
     "while": ("keyword", "control"),
     "struct": ("keyword", "struct"),
+    "fn": ("keyword", "function"),
 }
 
 
@@ -163,11 +164,28 @@ def lex(data: bytes) -> list[list[Token]]:
                         start_line, start_col = line, col
                         i += 1
                         col += 1
+                    case 40 | 41:  # '(', ')'
+                        tokens.append(Token("operator", chr(b), line, col))
+                        i += 1
+                        col += 1
                     case 44:  # ',' (comma)
                         tokens.append(Token("operator", ",", line, col))
                         i += 1
                         col += 1
-                    case 43 | 45 | 42:  # '+', '-', '*' (operators)
+                    case 46:  # '.' (dot)
+                        tokens.append(Token("operator", ".", line, col))
+                        i += 1
+                        col += 1
+                    case 45:  # '-' or '->'
+                        if i + 1 < n and data[i + 1] == ord(">"):
+                            tokens.append(Token("operator", "->", line, col))
+                            i += 2
+                            col += 2
+                        else:
+                            tokens.append(Token("operator", "-", line, col))
+                            i += 1
+                            col += 1
+                    case 43 | 42:  # '+', '*' (operators)
                         tokens.append(Token("operator", chr(b), line, col))
                         i += 1
                         col += 1
