@@ -1,0 +1,12 @@
+struct Point
+{
+    i32 x
+    i32 y
+    fn set := (i32 nx) -> i32
+    {
+        x := nx
+        exit x
+    }
+}
+Point mut p{1, 2}
+exit 0

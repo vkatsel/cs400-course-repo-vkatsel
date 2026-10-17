@@ -1,0 +1,27 @@
+struct PingPong
+{
+    i32 mut val
+    fn ping := (i32 n) -> i32
+    {
+        if n == 0
+        {
+            exit val
+        }
+        val := val + 1
+        i32 r{pong(n - 1)}
+        exit r
+    }
+    fn pong := (i32 n) -> i32
+    {
+        if n == 0
+        {
+            exit val
+        }
+        val := val + 2
+        i32 r{ping(n - 1)}
+        exit r
+    }
+}
+PingPong mut game{0}
+i32 res{game.ping(3)}
+exit res

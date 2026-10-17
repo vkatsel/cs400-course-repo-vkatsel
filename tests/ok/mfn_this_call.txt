@@ -1,0 +1,19 @@
+struct Point
+{
+    i32 mut x
+    i32 mut y
+    fn shift := (i32 dx) -> i32
+    {
+        x := x + dx
+        exit x
+    }
+    fn double_shift := (i32 dx) -> i32
+    {
+        i32 r1{shift(dx)}
+        i32 r2{shift(dx)}
+        exit r2
+    }
+}
+Point mut p{10, 20}
+i32 res{p.double_shift(5)}
+exit res

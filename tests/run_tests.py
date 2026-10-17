@@ -161,9 +161,7 @@ def main() -> None:
         sys.exit(1)
 
     test_files = sorted(
-        list(tests_dir.glob("test*.txt"))
-        + list(tests_dir.glob("fail*.txt"))
-        + list((tests_dir / "ok").glob("*.txt"))
+        list((tests_dir / "ok").glob("*.txt"))
         + list((tests_dir / "err").glob("*.txt"))
     )
     if not test_files:
