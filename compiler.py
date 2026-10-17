@@ -65,14 +65,20 @@ class VarNode(ExprNode):
 class FieldAccessNode(ExprNode):
     obj_name: str
     fields: list[str]
+    target: ExprNode | None = None
+    dot_loc: tuple[int, int] | None = None
     decl: "DeclNode | None" = field(default=None, init=False)
     field_indices: list[int] = field(default_factory=list, init=False)
     is_this_field: bool = field(default=False, init=False)
     this_field_info: Any = field(default=None, init=False)
 
     def dump(self, indent: int = 0) -> str:
+        prefix = " " * (indent * 2)
+        if self.target is not None:
+            chain = ".".join(self.fields)
+            return f"{prefix}Field {chain}\n{self.target.dump(indent + 1)}"
         chain = ".".join([self.obj_name, *self.fields])
-        return f"{' ' * (indent * 2)}Field {chain}"
+        return f"{prefix}Field {chain}"
 
     def accept(self, visitor: Any) -> Any:
         return visitor.visit_field_access(self)
@@ -117,6 +123,7 @@ class MemberCallNode(ExprNode):
     target: ExprNode
     func_name: str
     args: list[ExprNode]
+    dot_loc: tuple[int, int] | None = None
     struct_name: str | None = field(default=None, init=False)
 
     def dump(self, indent: int = 0) -> str:
@@ -129,6 +136,26 @@ class MemberCallNode(ExprNode):
 
     def accept(self, visitor: Any) -> Any:
         return visitor.visit_member_call(self)
+
+
+@dataclass(slots=True)
+class ReadNode(ExprNode):
+    def dump(self, indent: int = 0) -> str:
+        return f"{' ' * (indent * 2)}Read"
+
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_read(self)
+
+
+@dataclass(slots=True)
+class StringLiteralNode(ExprNode):
+    value: str
+
+    def dump(self, indent: int = 0) -> str:
+        return f"{' ' * (indent * 2)}String \"{self.value}\""
+
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_string_literal(self)
 
 
 @dataclass(slots=True)
@@ -365,6 +392,19 @@ class WhileNode(StmtNode):
 
 
 @dataclass(slots=True)
+class PrintNode(StmtNode):
+    arg: ExprNode
+
+    def dump(self, indent: int = 0) -> str:
+        lines = [f"{' ' * (indent * 2)}Print"]
+        lines.append(self.arg.dump(indent + 1))
+        return "\n".join(lines)
+
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_print(self)
+
+
+@dataclass(slots=True)
 class ProgramNode(Node):
     struct_defs: list[StructDefNode]
     fn_defs: list[FnDefNode]
@@ -464,6 +504,30 @@ class Parser:
         if tok.is_boolean or (tok.is_keyword and tok.text in ("true", "false")):
             self.eat()
             return BoolNode(tok.line, tok.col, tok.text == "true")
+        if tok.text == "read":
+            read_tok = self.eat()
+            open_paren = self.peek()
+            if open_paren is None or open_paren.text != "(":
+                if open_paren is None:
+                    line, col = self._end_of_line_loc()
+                    raise CompileError(line, col, "expected '(' after 'read', found end of line")
+                raise CompileError(open_paren.line, open_paren.col, f"expected '(' after 'read', got '{open_paren.text}'")
+            self.eat()
+            if self.peek() is not None and self.peek().text != ")":
+                arg_tok = self.peek()
+                raise CompileError(arg_tok.line, arg_tok.col, "read takes no arguments")
+            close_paren = self.peek()
+            if close_paren is None or close_paren.text != ")":
+                if close_paren is None:
+                    line, col = self._end_of_line_loc()
+                    raise CompileError(line, col, "expected ')' after 'read(', found end of line")
+                raise CompileError(close_paren.line, close_paren.col, f"expected ')' after 'read(', got '{close_paren.text}'")
+            self.eat()
+            return ReadNode(read_tok.line, read_tok.col)
+        if tok.text == "print":
+            raise CompileError(tok.line, tok.col, "'print' is a statement and has no value")
+        if tok.is_string or tok.kind == "string":
+            raise CompileError(tok.line, tok.col, "a string literal is only allowed as an argument to 'print'")
         if tok.is_identifier:
             id_tok = self.eat()
             if id_tok.text in self.known_structs:
@@ -500,6 +564,12 @@ class Parser:
                 if name_tok is None:
                     line, col = self._end_of_line_loc()
                     raise CompileError(line, col, "expected field or member name after '.', found end of line")
+                if name_tok.text in ("read", "print"):
+                    raise CompileError(
+                        name_tok.line,
+                        name_tok.col,
+                        f"cannot use reserved keyword '{name_tok.text}' as a member name",
+                    )
                 if not name_tok.is_identifier:
                     raise CompileError(
                         name_tok.line,
@@ -507,6 +577,11 @@ class Parser:
                         f"expected field or member name after '.', got '{name_tok.text}'",
                     )
                 self.eat()
+
+                is_call_target = isinstance(base_node, (CallNode, MemberCallNode)) or (
+                    isinstance(base_node, FieldAccessNode) and base_node.target is not None
+                )
+                dot_loc = (dot_tok.line, dot_tok.col) if is_call_target else None
 
                 if self.peek() is not None and self.peek().text == "(":
                     self.eat()
@@ -523,14 +598,14 @@ class Parser:
                             raise CompileError(line, col, "expected ')', found end of line")
                         raise CompileError(close_paren.line, close_paren.col, "expected ')'")
                     self.eat()
-                    base_node = MemberCallNode(name_tok.line, name_tok.col, base_node, name_tok.text, args)
+                    base_node = MemberCallNode(name_tok.line, name_tok.col, base_node, name_tok.text, args, dot_loc=dot_loc)
                 else:
                     if isinstance(base_node, VarNode):
                         base_node = FieldAccessNode(base_node.line, base_node.col, base_node.name, [name_tok.text])
                     elif isinstance(base_node, FieldAccessNode):
                         base_node.fields.append(name_tok.text)
                     else:
-                        base_node = FieldAccessNode(name_tok.line, name_tok.col, "", [name_tok.text])
+                        base_node = FieldAccessNode(name_tok.line, name_tok.col, "", [name_tok.text], target=base_node, dot_loc=dot_loc)
 
             return base_node
         raise CompileError(
@@ -593,6 +668,12 @@ class Parser:
         if name_tok is None:
             line, col = self._end_of_line_loc()
             raise CompileError(line, col, "expected a variable name, found end of line")
+        if name_tok.text in ("read", "print"):
+            raise CompileError(
+                name_tok.line,
+                name_tok.col,
+                f"cannot use reserved keyword '{name_tok.text}' as a variable name",
+            )
         if not name_tok.is_identifier:
             raise CompileError(
                 name_tok.line,
@@ -656,6 +737,12 @@ class Parser:
 
     def parse_assign(self) -> AssignNode | FieldAssignNode:
         name_tok = self.eat()
+        if self.peek() is not None and self.peek().text == "(":
+            raise CompileError(
+                self.peek().line,
+                self.peek().col,
+                "cannot assign to a call result",
+            )
         fields: list[str] = []
         while self.peek() is not None and self.peek().text == ".":
             dot_tok = self.eat()
@@ -670,6 +757,12 @@ class Parser:
                     f"expected field name after '.', got '{field_tok.text}'",
                 )
             self.eat()
+            if self.peek() is not None and self.peek().text == "(":
+                raise CompileError(
+                    self.peek().line,
+                    self.peek().col,
+                    "cannot assign to a call result",
+                )
             fields.append(field_tok.text)
 
         assign_op = self.peek()
@@ -822,6 +915,12 @@ class Parser:
             line_no, col = self._end_of_line_loc()
             raise CompileError(line_no, col, "expected struct name, found end of line")
         name_tok = line[1]
+        if name_tok.text in ("read", "print"):
+            raise CompileError(
+                name_tok.line,
+                name_tok.col,
+                f"cannot use reserved keyword '{name_tok.text}' as a struct name",
+            )
         if not name_tok.is_identifier:
             raise CompileError(
                 name_tok.line,
@@ -907,6 +1006,12 @@ class Parser:
                 )
 
             field_name_tok = cur[idx]
+            if field_name_tok.text in ("read", "print"):
+                raise CompileError(
+                    field_name_tok.line,
+                    field_name_tok.col,
+                    f"cannot use reserved keyword '{field_name_tok.text}' as a field name",
+                )
             if not field_name_tok.is_identifier:
                 raise CompileError(
                     field_name_tok.line,
@@ -962,6 +1067,12 @@ class Parser:
                 )
 
             fn_def = self.parse_fn_def()
+            if fn_def.name in ("read", "print"):
+                raise CompileError(
+                    fn_def.line,
+                    fn_def.col,
+                    f"cannot use reserved keyword '{fn_def.name}' as a member function name",
+                )
             if fn_def.name in field_names:
                 raise CompileError(
                     fn_def.line,
@@ -997,6 +1108,12 @@ class Parser:
         if name_tok is None:
             line_no, col = self._end_of_line_loc()
             raise CompileError(line_no, col, "expected function name, found end of line")
+        if name_tok.text in ("read", "print"):
+            raise CompileError(
+                name_tok.line,
+                name_tok.col,
+                f"cannot use reserved keyword '{name_tok.text}' as a function name",
+            )
         if not name_tok.is_identifier:
             raise CompileError(
                 name_tok.line,
@@ -1050,6 +1167,12 @@ class Parser:
                 if pname_tok is None:
                     line_no, col = self._end_of_line_loc()
                     raise CompileError(line_no, col, "expected parameter name, found end of line")
+                if pname_tok.text in ("read", "print"):
+                    raise CompileError(
+                        pname_tok.line,
+                        pname_tok.col,
+                        f"cannot use reserved keyword '{pname_tok.text}' as a parameter name",
+                    )
                 if not pname_tok.is_identifier:
                     raise CompileError(
                         pname_tok.line,
@@ -1127,6 +1250,57 @@ class Parser:
 
         return FnDefNode(name_tok.line, name_tok.col, name_tok.text, params, ret_type, body)
 
+    def parse_print(self) -> PrintNode:
+        print_tok = self.eat()
+        open_paren = self.peek()
+        if open_paren is None:
+            line, col = self._end_of_line_loc()
+            raise CompileError(line, col, "expected '(' after 'print', found end of line")
+        if open_paren.text != "(":
+            raise CompileError(
+                open_paren.line, open_paren.col, f"expected '(' after 'print', got '{open_paren.text}'"
+            )
+        self.eat()
+
+        if self.peek() is not None and self.peek().text == ")":
+            self.eat()
+            raise CompileError(
+                print_tok.line, print_tok.col, "wrong number of arguments for 'print': expected 1, got 0"
+            )
+
+        if self.peek() is None:
+            line, col = self._end_of_line_loc()
+            raise CompileError(line, col, "expected argument for 'print', found end of line")
+
+        if self.peek().is_string or self.peek().kind == "string":
+            str_tok = self.eat()
+            arg: ExprNode = StringLiteralNode(str_tok.line, str_tok.col, str_tok.text)
+        else:
+            arg = self.parse_expr()
+
+        if self.peek() is not None and self.peek().text == ",":
+            comma_tok = self.eat()
+            raise CompileError(
+                comma_tok.line, comma_tok.col, "wrong number of arguments for 'print': expected 1, got more"
+            )
+
+        close_paren = self.peek()
+        if close_paren is None:
+            line, col = self._end_of_line_loc()
+            raise CompileError(line, col, "expected ')' after 'print' argument, found end of line")
+        if close_paren.text != ")":
+            raise CompileError(
+                close_paren.line, close_paren.col, f"expected ')' after 'print' argument, got '{close_paren.text}'"
+            )
+        self.eat()
+
+        if (extra := self.peek()) is not None:
+            raise CompileError(
+                extra.line, extra.col, f"unexpected '{extra.text}' after the statement"
+            )
+
+        return PrintNode(print_tok.line, print_tok.col, arg)
+
     def parse_statement(self) -> StmtNode:
         tok = self.peek()
         if tok is None:
@@ -1136,6 +1310,10 @@ class Parser:
             return self.parse_if()
         if tok.text == "while":
             return self.parse_while()
+        if tok.text == "print":
+            node = self.parse_print()
+            self.next_line()
+            return node
         if tok.text in ("i32", "i64", "bool"):
             node = self.parse_decl()
             self.next_line()
@@ -1384,6 +1562,14 @@ class SemanticChecker:
         node.type = "bool"
         return node.type
 
+    def visit_read(self, node: ReadNode) -> str:
+        node.type = "i32"
+        return "i32"
+
+    def visit_string_literal(self, node: StringLiteralNode) -> str:
+        node.type = "string"
+        return "string"
+
     def visit_var(self, node: VarNode) -> str:
         decl = self.lookup(node.name)
         if decl is not None:
@@ -1403,28 +1589,32 @@ class SemanticChecker:
         )
 
     def visit_field_access(self, node: FieldAccessNode) -> str:
-        decl = self.lookup(node.obj_name)
-        if decl is not None:
-            node.decl = decl
-            curr_type = decl.type_name
-        elif self.current_struct is not None and node.obj_name in self.current_struct.fields_by_name:
-            f_info = self.current_struct.fields_by_name[node.obj_name]
-            node.is_this_field = True
-            node.this_field_info = f_info
-            curr_type = f_info.type_name
+        if node.target is not None:
+            curr_type = node.target.accept(self)
         else:
-            raise CompileError(
-                node.line,
-                node.col,
-                f"variable '{node.obj_name}' is used before its declaration",
-            )
+            decl = self.lookup(node.obj_name)
+            if decl is not None:
+                node.decl = decl
+                curr_type = decl.type_name
+            elif self.current_struct is not None and node.obj_name in self.current_struct.fields_by_name:
+                f_info = self.current_struct.fields_by_name[node.obj_name]
+                node.is_this_field = True
+                node.this_field_info = f_info
+                curr_type = f_info.type_name
+            else:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"variable '{node.obj_name}' is used before its declaration",
+                )
 
         indices: list[int] = []
         for field_name in node.fields:
             if curr_type not in self.structs:
+                err_line, err_col = node.dot_loc if node.dot_loc is not None else (node.line, node.col)
                 raise CompileError(
-                    node.line,
-                    node.col,
+                    err_line,
+                    err_col,
                     f"type '{curr_type}' is not a struct, cannot access field '{field_name}'",
                 )
             st_info = self.structs[curr_type]
@@ -1485,6 +1675,11 @@ class SemanticChecker:
                 node.line, node.col, f"the condition of 'while' must be bool, got {ct}"
             )
         node.body.accept(self)
+
+    def visit_print(self, node: PrintNode) -> None:
+        arg_type = node.arg.accept(self)
+        if arg_type not in ("i32", "i64", "bool", "string") and arg_type not in self.structs:
+            raise CompileError(node.arg.line, node.arg.col, f"cannot print value of type '{arg_type}'")
 
     def visit_block(self, node: BlockNode) -> None:
         self.scopes.append({})
@@ -1801,9 +1996,10 @@ class SemanticChecker:
     def visit_member_call(self, node: MemberCallNode) -> str:
         target_type = node.target.accept(self)
         if target_type not in self.structs:
+            err_line, err_col = node.dot_loc if node.dot_loc is not None else (node.line, node.col)
             raise CompileError(
-                node.line,
-                node.col,
+                err_line,
+                err_col,
                 f"type '{target_type}' is not a struct, cannot call member function '{node.func_name}'",
             )
         s_info = self.structs[target_type]
@@ -1885,7 +2081,10 @@ class SemanticChecker:
                         f"cannot call mutating member function '{n.func_name}' on const variable '{target.name}'",
                     )
         elif isinstance(target, FieldAccessNode):
-            if target.is_this_field:
+            if target.target is not None:
+                assert target.target.type is not None
+                curr_type = target.target.type
+            elif target.is_this_field:
                 assert target.this_field_info is not None
                 if not target.this_field_info.mutable:
                     raise CompileError(
@@ -1955,6 +2154,8 @@ class SemanticChecker:
             elif isinstance(n, WhileNode):
                 walk(n.cond)
                 walk(n.body)
+            elif isinstance(n, PrintNode):
+                walk(n.arg)
             elif isinstance(n, ExitNode):
                 walk(n.value)
             elif isinstance(n, BinOpNode):
@@ -1968,6 +2169,9 @@ class SemanticChecker:
             elif isinstance(n, StructLiteralNode):
                 for e in n.inits:
                     walk(e)
+            elif isinstance(n, FieldAccessNode):
+                if n.target is not None:
+                    walk(n.target)
 
         walk(node)
 
@@ -2068,6 +2272,8 @@ class CodeGenVisitor:
         self.i1_type = ir.IntType(1)
         self.i8_type = ir.IntType(8)
         self.struct_types: dict[str, ir.IdentifiedStructType] = {}
+        self.struct_defs: dict[str, StructDefNode] = {}
+        self.cached_strings: dict[str, ir.GlobalVariable] = {}
         self.fn_map: dict[str, ir.Function] = {}
         self.current_user_fn: FnDefNode | None = None
         self.current_this: ir.Value | None = None
@@ -2086,6 +2292,12 @@ class CodeGenVisitor:
             name="printf",
         )
 
+        self.scanf_fn = ir.Function(
+            self.module,
+            ir.FunctionType(self.i32_type, [ir.PointerType(self.i8_type)], var_arg=True),
+            name="scanf",
+        )
+
         fmt_int_bytes = b"Program exit with result %lld\n\0"
         self.fmt_int_var = self._create_global_string("fmt_int", fmt_int_bytes)
 
@@ -2094,6 +2306,13 @@ class CodeGenVisitor:
 
         self.str_true_var = self._create_global_string("str_true", b"true\0")
         self.str_false_var = self._create_global_string("str_false", b"false\0")
+
+        self.fmt_d_var = self._create_global_string("fmt_d", b"%d\0")
+        self.fmt_d_nl_var = self._create_global_string("fmt_d_nl", b"%d\n\0")
+        self.fmt_lld_var = self._create_global_string("fmt_lld", b"%lld\0")
+        self.fmt_lld_nl_var = self._create_global_string("fmt_lld_nl", b"%lld\n\0")
+        self.fmt_s_var = self._create_global_string("fmt_s", b"%s\0")
+        self.fmt_s_nl_var = self._create_global_string("fmt_s_nl", b"%s\n\0")
 
     def _create_global_string(self, name: str, data: bytes) -> ir.GlobalVariable:
         arr_t = ir.ArrayType(self.i8_type, len(data))
@@ -2116,7 +2335,54 @@ class CodeGenVisitor:
             case _:
                 return self.i32_type
 
+    def _get_cached_string(self, text: str) -> ir.GlobalVariable:
+        if text not in self.cached_strings:
+            data = text.encode("utf-8") + b"\0"
+            idx = len(self.cached_strings)
+            var = self._create_global_string(f"str_cache_{idx}", data)
+            self.cached_strings[text] = var
+        return self.cached_strings[text]
+
+    def emit_print_str_literal(self, s: str) -> None:
+        fmt_s = self.builder.bitcast(self.fmt_s_var, ir.PointerType(self.i8_type))
+        g = self._get_cached_string(s)
+        s_ptr = self.builder.bitcast(g, ir.PointerType(self.i8_type))
+        self.builder.call(self.printf_fn, [fmt_s, s_ptr])
+
+    def emit_print_struct(self, st_ptr: ir.Value, st_name: str) -> None:
+        s_def = self.struct_defs[st_name]
+        self.emit_print_str_literal(f"{st_name}{{")
+        for idx, f in enumerate(s_def.fields):
+            if idx > 0:
+                self.emit_print_str_literal(", ")
+            self.emit_print_str_literal(f"{f.name}: ")
+            f_ptr = self.builder.gep(
+                st_ptr,
+                [ir.Constant(self.i32_type, 0), ir.Constant(self.i32_type, idx)],
+                inbounds=True,
+                name=f"{f.name}_gep",
+            )
+            if f.type_name in self.struct_types:
+                self.emit_print_struct(f_ptr, f.type_name)
+            elif f.type_name == "i32":
+                val = self.builder.load(f_ptr, name=f.name)
+                fmt_d = self.builder.bitcast(self.fmt_d_var, ir.PointerType(self.i8_type))
+                self.builder.call(self.printf_fn, [fmt_d, val])
+            elif f.type_name == "i64":
+                val = self.builder.load(f_ptr, name=f.name)
+                fmt_lld = self.builder.bitcast(self.fmt_lld_var, ir.PointerType(self.i8_type))
+                self.builder.call(self.printf_fn, [fmt_lld, val])
+            elif f.type_name == "bool":
+                val = self.builder.load(f_ptr, name=f.name)
+                t_ptr = self.builder.bitcast(self.str_true_var, ir.PointerType(self.i8_type))
+                f_p = self.builder.bitcast(self.str_false_var, ir.PointerType(self.i8_type))
+                sel = self.builder.select(val, t_ptr, f_p, name="bool_s")
+                fmt_s = self.builder.bitcast(self.fmt_s_var, ir.PointerType(self.i8_type))
+                self.builder.call(self.printf_fn, [fmt_s, sel])
+        self.emit_print_str_literal("}")
+
     def visit_struct_def(self, node: StructDefNode) -> None:
+        self.struct_defs[node.name] = node
         st = self.module.context.get_identified_type(node.name)
         field_types = [self._llvm_type(f.type_name) for f in node.fields]
         st.set_body(*field_types)
@@ -2135,6 +2401,16 @@ class CodeGenVisitor:
     def visit_bool(self, node: BoolNode) -> ir.Value:
         return ir.Constant(self.i1_type, 1 if node.value else 0)
 
+    def visit_read(self, node: ReadNode) -> ir.Value:
+        fmt_ptr = self.builder.bitcast(self.fmt_d_var, ir.PointerType(self.i8_type))
+        read_slot = self.builder.alloca(self.i32_type, name="read_slot")
+        self.builder.call(self.scanf_fn, [fmt_ptr, read_slot])
+        return self.builder.load(read_slot, name="read_val")
+
+    def visit_string_literal(self, node: StringLiteralNode) -> ir.Value:
+        g = self._get_cached_string(node.value)
+        return self.builder.bitcast(g, ir.PointerType(self.i8_type))
+
     def visit_var(self, node: VarNode) -> ir.Value:
         if node.is_this_field:
             assert self.current_this is not None and node.field_info is not None
@@ -2152,6 +2428,12 @@ class CodeGenVisitor:
         return self.builder.load(node.decl.alloca, name=node.name)
 
     def visit_field_access(self, node: FieldAccessNode) -> ir.Value:
+        if node.target is not None:
+            val = node.target.accept(self)
+            for idx in node.field_indices:
+                val = self.builder.extract_value(val, idx, name="field_val")
+            return val
+
         if node.is_this_field:
             assert self.current_this is not None and node.this_field_info is not None
             ptr = self.builder.gep(
@@ -2365,6 +2647,85 @@ class CodeGenVisitor:
 
         self.builder.position_at_end(end_bb)
 
+    def visit_print(self, node: PrintNode) -> None:
+        arg_type = node.arg.type
+        if arg_type == "string":
+            str_ptr = node.arg.accept(self)
+            fmt_s_nl = self.builder.bitcast(self.fmt_s_nl_var, ir.PointerType(self.i8_type))
+            self.builder.call(self.printf_fn, [fmt_s_nl, str_ptr])
+        elif arg_type == "i32":
+            val = node.arg.accept(self)
+            fmt_d_nl = self.builder.bitcast(self.fmt_d_nl_var, ir.PointerType(self.i8_type))
+            self.builder.call(self.printf_fn, [fmt_d_nl, val])
+        elif arg_type == "i64":
+            val = node.arg.accept(self)
+            fmt_lld_nl = self.builder.bitcast(self.fmt_lld_nl_var, ir.PointerType(self.i8_type))
+            self.builder.call(self.printf_fn, [fmt_lld_nl, val])
+        elif arg_type == "bool":
+            val = node.arg.accept(self)
+            fmt_s_nl = self.builder.bitcast(self.fmt_s_nl_var, ir.PointerType(self.i8_type))
+            t_ptr = self.builder.bitcast(self.str_true_var, ir.PointerType(self.i8_type))
+            f_ptr = self.builder.bitcast(self.str_false_var, ir.PointerType(self.i8_type))
+            selected_str = self.builder.select(val, t_ptr, f_ptr, name="bool_str")
+            self.builder.call(self.printf_fn, [fmt_s_nl, selected_str])
+        elif arg_type in self.struct_types:
+            st_ptr: ir.Value
+            if isinstance(node.arg, VarNode):
+                if node.arg.is_this_field:
+                    assert self.current_this is not None and node.arg.field_info is not None
+                    st_ptr = self.builder.gep(
+                        self.current_this,
+                        [
+                            ir.Constant(self.i32_type, 0),
+                            ir.Constant(self.i32_type, node.arg.field_info.index),
+                        ],
+                        inbounds=True,
+                        name=f"{node.arg.name}_gep",
+                    )
+                else:
+                    assert node.arg.decl is not None and node.arg.decl.alloca is not None
+                    st_ptr = node.arg.decl.alloca
+            elif isinstance(node.arg, FieldAccessNode):
+                if node.arg.target is not None:
+                    val = node.arg.target.accept(self)
+                    temp_slot = self.builder.alloca(val.type, name="temp_print_receiver")
+                    self.builder.store(val, temp_slot)
+                    ptr = temp_slot
+                elif node.arg.is_this_field:
+                    assert self.current_this is not None and node.arg.this_field_info is not None
+                    ptr = self.builder.gep(
+                        self.current_this,
+                        [
+                            ir.Constant(self.i32_type, 0),
+                            ir.Constant(self.i32_type, node.arg.this_field_info.index),
+                        ],
+                        inbounds=True,
+                        name="field_base_gep",
+                    )
+                else:
+                    assert node.arg.decl is not None and node.arg.decl.alloca is not None
+                    ptr = node.arg.decl.alloca
+
+                for idx in node.arg.field_indices:
+                    ptr = self.builder.gep(
+                        ptr,
+                        [
+                            ir.Constant(self.i32_type, 0),
+                            ir.Constant(self.i32_type, idx),
+                        ],
+                        inbounds=True,
+                        name="field_chain_gep",
+                    )
+                st_ptr = ptr
+            else:
+                val = node.arg.accept(self)
+                temp_slot = self.builder.alloca(val.type, name="temp_print_struct")
+                self.builder.store(val, temp_slot)
+                st_ptr = temp_slot
+
+            self.emit_print_struct(st_ptr, arg_type)
+            self.emit_print_str_literal("\n")
+
     def visit_call(self, node: CallNode) -> ir.Value:
         if node.is_this_call:
             callee = self.fn_map[f"{node.struct_name}_{node.func_name}"]
@@ -2406,7 +2767,12 @@ class CodeGenVisitor:
                 assert node.target.decl is not None and node.target.decl.alloca is not None
                 target_ptr = node.target.decl.alloca
         elif isinstance(node.target, FieldAccessNode):
-            if node.target.is_this_field:
+            if node.target.target is not None:
+                val = node.target.target.accept(self)
+                temp_slot = self.builder.alloca(val.type, name="temp_receiver_slot")
+                self.builder.store(val, temp_slot)
+                ptr = temp_slot
+            elif node.target.is_this_field:
                 assert self.current_this is not None and node.target.this_field_info is not None
                 ptr = self.builder.gep(
                     self.current_this,

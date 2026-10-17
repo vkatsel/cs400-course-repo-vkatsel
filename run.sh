@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
 set -e
 
-if [ $# -lt 1 ]; then
-    echo "Usage: ./run.sh <source_file.txt> [output.ll]"
-    exit 1
-fi
-
-INPUT="$1"
-OUTPUT="${2:-/tmp/output.ll}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Set PYTHONPATH / activate virtualenv if available
@@ -25,8 +18,28 @@ elif [ -f "/home/ubuntu/lcd/bin/activate" ]; then
     source "/home/ubuntu/lcd/bin/activate" || true
 fi
 
+# If no arguments or test flag, run the test runner
+if [ $# -eq 0 ] || [ "$1" = "test" ] || [ "$1" = "--tests" ] || [ "$1" = "-t" ]; then
+    exec python3 "$DIR/tests/run_tests.py"
+fi
+
+# If --ast or --lex flag, run compiler directly and exit
+if [ "$1" = "--ast" ] || [ "$1" = "--lex" ]; then
+    exec python3 "$DIR/compiler.py" "$@"
+fi
+
+INPUT="$1"
+OUTPUT="${2:-/tmp/output.ll}"
+
 # Step 1: Compile to LLVM IR
 python3 "$DIR/compiler.py" "$INPUT" "$OUTPUT"
+
+# Determine input pipe if .in file exists and stdin is a terminal
+IN_FILE="${INPUT%.*}.in"
+INPUT_REDIR=""
+if [ -f "$IN_FILE" ] && [ -t 0 ]; then
+    exec < "$IN_FILE"
+fi
 
 # Step 2: Run the IR
 if command -v lli &> /dev/null; then

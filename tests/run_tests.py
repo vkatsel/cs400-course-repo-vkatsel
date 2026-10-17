@@ -24,9 +24,10 @@ def get_python_exe() -> str:
     return sys.executable
 
 
-def run_ir(out_ll: Path) -> str | None:
+def run_ir(out_ll: Path, in_file: Path | None = None) -> str | None:
+    stdin_text = in_file.read_text(encoding="utf-8") if in_file and in_file.exists() else None
     if shutil.which("lli") is not None:
-        res = subprocess.run(["lli", str(out_ll)], capture_output=True, text=True)
+        res = subprocess.run(["lli", str(out_ll)], input=stdin_text, capture_output=True, text=True)
         return res.stdout.strip()
 
     if shutil.which("llc") is not None and shutil.which("clang") is not None:
@@ -38,7 +39,7 @@ def run_ir(out_ll: Path) -> str | None:
                 check=True,
             )
             subprocess.run(["clang", "-fPIE", str(out_o), "-o", str(out_bin)], check=True)
-            bin_res = subprocess.run([str(out_bin)], capture_output=True, text=True)
+            bin_res = subprocess.run([str(out_bin)], input=stdin_text, capture_output=True, text=True)
             return bin_res.stdout.strip()
 
     jit_script = f"""
@@ -66,7 +67,7 @@ cfunc = ctypes.CFUNCTYPE(ctypes.c_int32)(func_ptr)
 cfunc()
 """
     py_exe = get_python_exe()
-    res = subprocess.run([py_exe, "-c", jit_script], capture_output=True, text=True)
+    res = subprocess.run([py_exe, "-c", jit_script], input=stdin_text, capture_output=True, text=True)
     if res.returncode == 0:
         return res.stdout.strip()
     return None
@@ -133,7 +134,8 @@ def run_single_test(test_file: Path, tmpdir: str) -> tuple[bool, str]:
         if not out_ll.exists() or out_ll.stat().st_size == 0:
             return False, f"❌ FAIL: {test_name} (no IR output generated)"
 
-        actual_output = run_ir(out_ll)
+        in_file = test_file.with_suffix(".in")
+        actual_output = run_ir(out_ll, in_file if in_file.exists() else None)
         if actual_output is not None and expected_text:
             if actual_output != expected_text:
                 msg = (
