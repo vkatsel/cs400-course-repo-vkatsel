@@ -1,0 +1,11 @@
+struct Point
+{
+    i32 mut x
+    i32 mut y
+}
+fn get_x := (Point p) -> i32
+{
+    exit p.x
+}
+Point pt{17, 23}
+exit get_x(pt)

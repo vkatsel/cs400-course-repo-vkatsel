@@ -1,0 +1,11 @@
+fn inc := (i32 x) -> i32
+{
+    i32 res{x + 1}
+    exit res
+}
+fn double := (i32 x) -> i32
+{
+    i32 res{x * 2}
+    exit res
+}
+exit double(inc(double(5)))

@@ -1,0 +1,9 @@
+struct Point
+{
+    i32 d2
+    fn d2 := () -> i32
+    {
+        exit 0
+    }
+}
+exit 0
