@@ -759,3 +759,38 @@ A   tests/run_tests.py
 2. Якщо запустити `./run.sh tests/ok/some_test.txt` — компілює та запускає конкретний тест.
 
 ---
+
+User:
+коміть
+
+Model:
+Зміни успішно зафіксовано в git!
+
+* **Хеш коміту**: `335c7c7`
+* **Гілка**: `practice-7`
+* **Повідомлення**: `feat: implement Task 3, Task 4, and Additional Task (read, print, chained calls)`
+* **Робоче дерево**: чисте (`nothing to commit, working tree clean`).
+* **Усі тести**: `104 passed, 0 failed` (запускаються просто через `./run.sh`).
+
+---
+
+User:
+чекай, а ти граматику оновив?
+
+Model:
+Дякую, що звернув увагу! Справді, [grammar.ebnf](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/grammar.ebnf) ще залишався з 5-ї практики.
+
+Я щойно оновив його до актуального стану **Практики 7**, додавши:
+* Визначення структур з полями та методами:
+  `struct_def ::= "struct" ident NL "{" NL field_def { field_def } { member_fn_def } "}" NL ;`
+* Глобальні функції: `fn_def` та `param_list`
+* Оператор `print`: `print_stmt ::= "print" "(" ( expr | string_literal ) ")" NL ;`
+* Фактор `read()` та виклики функцій / методів у факторах:
+  `factor ::= ... | "read" "(" ")" | ( ident | call ) { chain_elem } ;`
+  `chain_elem ::= "." ident [ "(" [ arg_list ] ")" ] ;`
+* Багатозначні ініціалізатори для структур: `init_item`
+* Присвоєння у ланцюжки полів: `assign ::= ( ident | ident { "." ident } ) ":=" expr NL ;`
+
+Зробити окремий коміт `docs: update grammar.ebnf for Practice 7` чи заамендити в попередній?
+
+---
