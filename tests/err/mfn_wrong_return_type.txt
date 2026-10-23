@@ -1,0 +1,10 @@
+struct Point
+{
+    i32 x
+    fn get_flag := () -> bool
+    {
+        exit x
+    }
+}
+Point p{1}
+exit 0

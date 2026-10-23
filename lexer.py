@@ -54,6 +54,10 @@ class Token:
         return self.kind == "block"
 
     @property
+    def is_string(self) -> bool:
+        return self.kind == "string"
+
+    @property
     def is_endline(self) -> bool:
         return self.kind == "endline"
 
@@ -78,6 +82,10 @@ KEYWORDS: dict[str, tuple[str, str]] = {
     "if": ("keyword", "control"),
     "else": ("keyword", "control"),
     "while": ("keyword", "control"),
+    "struct": ("keyword", "struct"),
+    "fn": ("keyword", "function"),
+    "read": ("keyword", "builtin"),
+    "print": ("keyword", "statement"),
 }
 
 
@@ -162,10 +170,56 @@ def lex(data: bytes) -> list[list[Token]]:
                         start_line, start_col = line, col
                         i += 1
                         col += 1
-                    case 43 | 45 | 42:  # '+', '-', '*' (operators)
+                    case 40 | 41:  # '(', ')'
                         tokens.append(Token("operator", chr(b), line, col))
                         i += 1
                         col += 1
+                    case 44:  # ',' (comma)
+                        tokens.append(Token("operator", ",", line, col))
+                        i += 1
+                        col += 1
+                    case 46:  # '.' (dot)
+                        tokens.append(Token("operator", ".", line, col))
+                        i += 1
+                        col += 1
+                    case 45:  # '-' or '->'
+                        if i + 1 < n and data[i + 1] == ord(">"):
+                            tokens.append(Token("operator", "->", line, col))
+                            i += 2
+                            col += 2
+                        else:
+                            tokens.append(Token("operator", "-", line, col))
+                            i += 1
+                            col += 1
+                    case 43 | 42:  # '+', '*' (operators)
+                        tokens.append(Token("operator", chr(b), line, col))
+                        i += 1
+                        col += 1
+                    case 34:  # '"' (string literal)
+                        start_line, start_col = line, col
+                        i += 1
+                        col += 1
+                        content_chars: list[str] = []
+                        closed = False
+                        while i < n:
+                            cb = data[i]
+                            if cb == 10 or cb == 13:
+                                break
+                            if cb == 34:
+                                closed = True
+                                i += 1
+                                col += 1
+                                break
+                            content_chars.append(chr(cb))
+                            i += 1
+                            col += 1
+                        if not closed:
+                            raise CompileError(
+                                start_line, start_col, "literal not closed on its line"
+                            )
+                        tokens.append(
+                            Token("string", "".join(content_chars), start_line, start_col)
+                        )
                     case _:
                         char_str = chr(b)
                         raise CompileError(line, col, f"unexpected byte '{char_str}'")

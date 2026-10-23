@@ -1,0 +1,7 @@
+fn pass_i64 := (i64 v) -> i64
+{
+    i64 res{v + 10}
+    exit res
+}
+i32 val{5}
+exit pass_i64(val)

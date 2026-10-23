@@ -1,0 +1,1 @@
+line 12:15: type 'i32' is not a struct, cannot access field 'x'

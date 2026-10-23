@@ -1,0 +1,5 @@
+fn get_flag := () -> bool
+{
+    exit 42
+}
+exit 0

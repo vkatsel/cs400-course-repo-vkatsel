@@ -1,0 +1,13 @@
+struct Point
+{
+    i32 x
+    i32 y
+    fn calc := (i32 x) -> i32
+    {
+        i32 y{x * 2}
+        exit y
+    }
+}
+Point p{10, 20}
+i32 res{p.calc(5)}
+exit res

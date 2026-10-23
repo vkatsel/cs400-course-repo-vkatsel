@@ -1,28 +1,55 @@
-(* Grammar for Practice 5 Language in EBNF *)
+(* Grammar for Practice 7 Language in EBNF *)
 (* Languages and Compilers Design *)
 
-program    ::= { statement } exit ;
+program       ::= { struct_def } { fn_def } { statement } exit ;
 
-statement  ::= decl | assign | if_stmt | while_stmt ;
+struct_def    ::= "struct" ident NL "{" NL field_def { field_def } { member_fn_def } "}" NL ;
 
-decl       ::= type [ "mut" ] ident "{" expr "}" NL ;
+field_def     ::= type [ "mut" ] ident NL ;
 
-type       ::= "i32" | "i64" | "bool" ;
+member_fn_def ::= "fn" ident ":=" "(" [ param_list ] ")" "->" type NL block ;
 
-assign     ::= ident ":=" expr NL ;
+fn_def        ::= "fn" ident ":=" "(" [ param_list ] ")" "->" type NL block ;
 
-exit       ::= "exit" factor NL ;
+param_list    ::= param { "," param } ;
 
-if_stmt    ::= "if" expr NL block [ "else" NL block ] ;
+param         ::= type ident ;
 
-while_stmt ::= "while" expr NL block ;
+statement     ::= decl | assign | if_stmt | while_stmt | print_stmt ;
 
-block      ::= "{" NL { statement } [ exit ] "}" NL ;
+decl          ::= type [ "mut" ] ident "{" init_item { "," init_item } "}" NL ;
 
-expr       ::= arith [ ( "==" | "!=" ) arith ] ;
+init_item     ::= expr | "{" init_item { "," init_item } "}" ;
 
-arith      ::= term { ( "+" | "-" ) term } ;
+assign        ::= ( ident | ident { "." ident } ) ":=" expr NL ;
 
-term       ::= factor { "*" factor } ;
+print_stmt    ::= "print" "(" ( expr | string_literal ) ")" NL ;
 
-factor     ::= number | "true" | "false" | ident | "!" factor ;
+exit          ::= "exit" factor NL ;
+
+if_stmt       ::= "if" expr NL block [ "else" NL block ] ;
+
+while_stmt    ::= "while" expr NL block ;
+
+block         ::= "{" NL { statement } [ exit ] "}" NL ;
+
+expr          ::= arith [ ( "==" | "!=" ) arith ] ;
+
+arith         ::= term { ( "+" | "-" ) term } ;
+
+term          ::= factor { "*" factor } ;
+
+factor        ::= number
+                | "true"
+                | "false"
+                | "!" factor
+                | "read" "(" ")"
+                | ( ident | call ) { chain_elem } ;
+
+call          ::= ident "(" [ arg_list ] ")" ;
+
+arg_list      ::= expr { "," expr } ;
+
+chain_elem    ::= "." ident [ "(" [ arg_list ] ")" ] ;
+
+type          ::= "i32" | "i64" | "bool" | ident ;
