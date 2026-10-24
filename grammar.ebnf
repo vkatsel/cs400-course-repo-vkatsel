@@ -21,7 +21,7 @@ lambda        ::= "fn" ident ":=" "[" [ capture_list ] "]" "(" [ param_list ] ")
 
 capture_list  ::= capture { "," capture } ;
 
-capture       ::= ident ;
+capture       ::= [ "mut" ] ident ;
 
 decl          ::= type [ "mut" ] ident "{" init_item { "," init_item } "}" NL ;
 

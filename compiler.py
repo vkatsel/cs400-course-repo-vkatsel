@@ -1350,6 +1350,11 @@ class Parser:
         captures: list[CaptureDef] = []
         if self.peek() is not None and self.peek().text != "]":
             while True:
+                is_mut = False
+                if self.peek() is not None and self.peek().text == "mut":
+                    self.eat()
+                    is_mut = True
+
                 cap_tok = self.peek()
                 if cap_tok is None:
                     line_no, col = self._end_of_line_loc()
@@ -1368,7 +1373,7 @@ class Parser:
                     )
                 self.eat()
                 captures.append(
-                    CaptureDef(cap_tok.text, False, cap_tok.line, cap_tok.col)
+                    CaptureDef(cap_tok.text, is_mut, cap_tok.line, cap_tok.col)
                 )
 
                 if self.peek() is not None and self.peek().text == ",":

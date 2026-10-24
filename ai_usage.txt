@@ -391,3 +391,73 @@ decl_node = DeclNode(..., mutable=is_decl_mut, ...)
 Бажаєте, щоб ми зараз підключили підтримку `[mut x]` у парсері та граматиці та додали відповідні тести з завдання?
 
 ---
+
+User:
+тоді давай це також зробимо, тільки закоміть таск 2. також покрий тестами, в @[cs400-course-repo-vkatsel/examples] створи програму, яка буде покривавти все шо сьогодні було зроблено. також додай туди якийсь трікі код, щоб було видно як він працю
+
+Model:
+Оновлюю журнал використання ШІ (`ai_usage.txt`)...
+
+---
+
+User:
+а для чого ти самостійно запустив скрипт, воно ж самелогується, і що там по тому саску?
+
+Model:
+Ви абсолютно праві — хук `PostInvocation` логує все автоматично після кожної репліки, тому запускати вручну не було потреби (я скасував той фоновий процес).
+
+---
+
+### Що зроблено по тасці:
+
+1. **Task 2 закомічено** в гілку `practice-8`:
+   - Хеш коміту: `94c74f1` (*"feat: implement Practice 8 Task 2 (lambdas and closures) with full test coverage"*).
+
+2. **Додатковий таск (`[mut x]` captures) повністю реалізовано**:
+   - [grammar.ebnf](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/grammar.ebnf): оновлено правило `capture ::= [ "mut" ] ident ;`.
+   - [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py):
+     - `parse_lambda` тепер розпізнає `mut` перед назвою захоплення.
+     - Для таких захоплень генеруються `mut` поля у структурі `lambda.<name>`.
+     - Присвоєння до них у тілі лямбди автоматично робить метод `call` мутуючим.
+     - Сама змінна лямбди стає `mut`, якщо хоча б одне захоплення є `mut`.
+     - Перевірка мутабельності викликів (`_check_target_mut` та фіксована точка) контролює, де таку лямбду дозволено викликати.
+
+3. **Покриття тестами (138/138 тестів пройдено успішно)**:
+   - [lambda_mut_counter_example.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/lambda_mut_counter_example.txt) — еталонна програма з лічильником `next()` та `twice()`, виводить `1`, `2`, `34`, `3`, `Program exit with result 0`.
+   - [lambda_mut_in_loop.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/lambda_mut_in_loop.txt) — зміна `mut` захоплення всередині циклу.
+   - [lambda_two_copies.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/lambda_two_copies.txt) — дві окремі лямбди зі своїми незалежними копіями однієї змінної.
+   - [lambda_const_and_mut.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/lambda_const_and_mut.txt) — поєднання `const` і `mut` захоплень в одному списку `[factor, mut count]`.
+   - [lambda_mut_call_const_capture.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/lambda_mut_call_const_capture.txt) — спроба виклику мутуючої лямбди через константне захоплення `[next]`, що дає очікувану помилку:
+     `compilation error: line 9:11: cannot call 'next': its 'call' changes it, and it is not mut`.
+
+4. **Створено демонстраційну програму [examples/practice8_demo.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples/practice8_demo.txt)**:
+   Вона демонструє всі нові можливості разом:
+   - **Callable-об'єкти:** структура `Multiplier` з методом `call`, виклики як `mul3(10)` і `mul3.call(10)`, а також callable-поле в іншій структурі `pipe.op(5)`.
+   - **Ізоляція копій у константних лямбдах:** зміна зовнішньої змінної `threshold` після оголошення лямбди не змінює її захоплене значення.
+   - **Трікі-код зі станом (stateful closures):**
+     - Лямбда `counter` має власний змінюваний стан `[mut seed]`.
+     - Її захоплює інша лямбда: `branch_a := [mut counter]`.
+     - `branch_a` робить **окрему копію стану лічильника** і рахує далі на ній (`3`, `4` $\to$ `34`).
+     - Оригінальний `counter` продовжує рахувати зі свого стану (`2` $\to$ `3`).
+     - Зовнішня змінна `seed` залишається недоторканою (`0`).
+
+Виконання демо-програми через `./run.sh examples/practice8_demo.txt` повертає очікувані значення:
+```text
+30
+30
+15
+21
+18
+true
+false
+1
+2
+34
+3
+0
+Program exit with result 4
+```
+
+Всі зміни Додаткового таску зараз знаходяться в робочому дереві. Якщо все виглядає добре, скажіть — і я зроблю фінальний коміт для додаткового таску.
+
+---
