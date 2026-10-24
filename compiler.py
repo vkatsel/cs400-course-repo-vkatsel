@@ -106,9 +106,15 @@ class CallNode(ExprNode):
     args: list[ExprNode]
     is_this_call: bool = field(default=False, init=False)
     struct_name: str | None = field(default=None, init=False)
+    rewritten_call: "MemberCallNode | None" = field(default=None, init=False)
 
     def dump(self, indent: int = 0) -> str:
         prefix = " " * (indent * 2)
+        if self.rewritten_call is not None:
+            lines = [f"{prefix}CallableCall {self.func_name}"]
+            for a in self.args:
+                lines.append(a.dump(indent + 1))
+            return "\n".join(lines)
         lines = [f"{prefix}Call {self.func_name}"]
         for a in self.args:
             lines.append(a.dump(indent + 1))
@@ -125,9 +131,17 @@ class MemberCallNode(ExprNode):
     args: list[ExprNode]
     dot_loc: tuple[int, int] | None = None
     struct_name: str | None = field(default=None, init=False)
+    is_callable_call: bool = field(default=False, init=False)
+    callable_name: str | None = field(default=None, init=False)
 
     def dump(self, indent: int = 0) -> str:
         prefix = " " * (indent * 2)
+        if self.is_callable_call:
+            lines = [f"{prefix}CallableCall {self.callable_name or self.func_name}"]
+            lines.append(self.target.dump(indent + 1))
+            for a in self.args:
+                lines.append(a.dump(indent + 1))
+            return "\n".join(lines)
         lines = [f"{prefix}MemberCall {self.func_name}"]
         lines.append(self.target.dump(indent + 1))
         for a in self.args:
@@ -1948,6 +1962,57 @@ class SemanticChecker:
             )
 
     def visit_call(self, node: CallNode) -> str:
+        is_var = (
+            self.lookup(node.func_name) is not None
+            or (
+                self.current_struct is not None
+                and node.func_name in self.current_struct.fields_by_name
+            )
+        )
+        is_fn = (
+            (
+                self.current_struct is not None
+                and node.func_name in self.current_struct.member_fns
+            )
+            or node.func_name in self.functions
+        )
+
+        if is_var and is_fn:
+            raise CompileError(
+                node.line,
+                node.col,
+                f"'{node.func_name}' is both a variable and a function: rename one of them",
+            )
+
+        if is_var:
+            target_var = VarNode(node.line, node.col, node.func_name)
+            var_type = target_var.accept(self)
+            if var_type not in self.structs:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"'{node.func_name}' is not callable: it is {var_type}",
+                )
+            s_info = self.structs[var_type]
+            if "call" not in s_info.member_fns:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"'{node.func_name}' is not callable: {var_type} has no member function 'call'",
+                )
+            rewritten = MemberCallNode(
+                node.line,
+                node.col,
+                target_var,
+                "call",
+                node.args,
+            )
+            rewritten.is_callable_call = True
+            rewritten.callable_name = node.func_name
+            node.rewritten_call = rewritten
+            node.type = self.visit_member_call(rewritten)
+            return node.type
+
         if self.current_struct is not None and node.func_name in self.current_struct.member_fns:
             m_info = self.current_struct.member_fns[node.func_name]
             node.is_this_call = True
@@ -2003,6 +2068,54 @@ class SemanticChecker:
                 f"type '{target_type}' is not a struct, cannot call member function '{node.func_name}'",
             )
         s_info = self.structs[target_type]
+        if not node.is_callable_call and node.func_name in s_info.fields_by_name:
+            field_name = node.func_name
+            if isinstance(node.target, VarNode):
+                field_target = FieldAccessNode(
+                    node.target.line,
+                    node.target.col,
+                    node.target.name,
+                    [field_name],
+                )
+            elif isinstance(node.target, FieldAccessNode):
+                field_target = FieldAccessNode(
+                    node.target.line,
+                    node.target.col,
+                    node.target.obj_name,
+                    [*node.target.fields, field_name],
+                    target=node.target.target,
+                    dot_loc=node.target.dot_loc,
+                )
+            else:
+                field_target = FieldAccessNode(
+                    node.line,
+                    node.col,
+                    "",
+                    [field_name],
+                    target=node.target,
+                    dot_loc=node.dot_loc,
+                )
+            field_type = field_target.accept(self)
+            if field_type not in self.structs:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"'{field_name}' is not callable: it is {field_type}",
+                )
+            field_struct_info = self.structs[field_type]
+            if "call" not in field_struct_info.member_fns:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"'{field_name}' is not callable: {field_type} has no member function 'call'",
+                )
+            node.target = field_target
+            node.func_name = "call"
+            node.is_callable_call = True
+            node.callable_name = field_name
+            target_type = field_type
+            s_info = field_struct_info
+
         if node.func_name not in s_info.member_fns:
             raise CompileError(
                 node.line,
@@ -2019,6 +2132,13 @@ class SemanticChecker:
                 self.current_member_fn.called_member_fns.append((target_type, node.func_name))
 
         if len(node.args) != len(m_info.params):
+            if node.is_callable_call:
+                callee_label = node.callable_name or "call"
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"wrong number of arguments for '{callee_label}': expected {len(m_info.params)}, got {len(node.args)}",
+                )
             raise CompileError(
                 node.line,
                 node.col,
@@ -2026,11 +2146,16 @@ class SemanticChecker:
             )
         for arg, param in zip(node.args, m_info.params):
             arg.accept(self)
+            what_msg = (
+                f"pass argument to '{node.callable_name or 'call'}' parameter '{param.name}'"
+                if node.is_callable_call
+                else f"pass argument to parameter '{param.name}'"
+            )
             self.check_assignable(
                 arg,
                 param.type_name,
                 arg,
-                f"pass argument to parameter '{param.name}'",
+                what_msg,
             )
         node.type = m_info.return_type
         return node.type
@@ -2067,6 +2192,12 @@ class SemanticChecker:
             if target.is_this_field:
                 assert target.field_info is not None
                 if not target.field_info.mutable:
+                    if n.is_callable_call:
+                        raise CompileError(
+                            n.line,
+                            n.col,
+                            f"cannot call '{target.name}': its 'call' changes it, and it is not mut",
+                        )
                     raise CompileError(
                         n.line,
                         n.col,
@@ -2075,18 +2206,31 @@ class SemanticChecker:
             else:
                 assert target.decl is not None
                 if not target.decl.mutable:
+                    if n.is_callable_call:
+                        raise CompileError(
+                            n.line,
+                            n.col,
+                            f"cannot call '{target.name}': its 'call' changes it, and it is not mut",
+                        )
                     raise CompileError(
                         n.line,
                         n.col,
                         f"cannot call mutating member function '{n.func_name}' on const variable '{target.name}'",
                     )
         elif isinstance(target, FieldAccessNode):
+            callable_label = n.callable_name or target.fields[-1]
             if target.target is not None:
                 assert target.target.type is not None
                 curr_type = target.target.type
             elif target.is_this_field:
                 assert target.this_field_info is not None
                 if not target.this_field_info.mutable:
+                    if n.is_callable_call:
+                        raise CompileError(
+                            n.line,
+                            n.col,
+                            f"cannot call '{callable_label}': its 'call' changes it, and '{target.obj_name}' is not mut",
+                        )
                     raise CompileError(
                         n.line,
                         n.col,
@@ -2096,6 +2240,12 @@ class SemanticChecker:
             else:
                 assert target.decl is not None
                 if not target.decl.mutable:
+                    if n.is_callable_call:
+                        raise CompileError(
+                            n.line,
+                            n.col,
+                            f"cannot call '{callable_label}': its 'call' changes it, and '{target.obj_name}' is not mut",
+                        )
                     raise CompileError(
                         n.line,
                         n.col,
@@ -2106,6 +2256,12 @@ class SemanticChecker:
             for f_name in target.fields:
                 f_info = self.structs[curr_type].fields_by_name[f_name]
                 if not f_info.mutable:
+                    if n.is_callable_call:
+                        raise CompileError(
+                            n.line,
+                            n.col,
+                            f"cannot call '{callable_label}': its 'call' changes it, and it is not mut",
+                        )
                     raise CompileError(
                         n.line,
                         n.col,
@@ -2164,8 +2320,11 @@ class SemanticChecker:
             elif isinstance(n, NotNode):
                 walk(n.expr)
             elif isinstance(n, CallNode):
-                for a in n.args:
-                    walk(a)
+                if n.rewritten_call is not None:
+                    walk(n.rewritten_call)
+                else:
+                    for a in n.args:
+                        walk(a)
             elif isinstance(n, StructLiteralNode):
                 for e in n.inits:
                     walk(e)
@@ -2727,6 +2886,9 @@ class CodeGenVisitor:
             self.emit_print_str_literal("\n")
 
     def visit_call(self, node: CallNode) -> ir.Value:
+        if node.rewritten_call is not None:
+            return self.visit_member_call(node.rewritten_call)
+
         if node.is_this_call:
             callee = self.fn_map[f"{node.struct_name}_{node.func_name}"]
             assert self.current_this is not None
@@ -2918,10 +3080,15 @@ def parse_ast(source_bytes: bytes) -> ProgramNode:
     return Parser(token_lines).parse_program()
 
 
-def compile_source(source_bytes: bytes) -> ir.Module:
+def check_ast(source_bytes: bytes) -> ProgramNode:
     ast = parse_ast(source_bytes)
     checker = SemanticChecker()
     checker.visit_program(ast)
+    return ast
+
+
+def compile_source(source_bytes: bytes) -> ir.Module:
+    ast = check_ast(source_bytes)
     context = ir.Context()
     module = ir.Module(name="practice6", context=context)
     module.triple = llvm.get_default_triple()
@@ -2959,10 +3126,25 @@ def main() -> None:
             print(f"Error: file '{sys.argv[2]}' not found", file=sys.stderr)
             sys.exit(1)
 
+    if len(sys.argv) == 3 and sys.argv[1] == "--ast-checked":
+        try:
+            with open(sys.argv[2], "rb") as f:
+                content = f.read()
+            ast = check_ast(content)
+            print(ast.dump())
+            sys.exit(0)
+        except CompileError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
+        except FileNotFoundError:
+            print(f"Error: file '{sys.argv[2]}' not found", file=sys.stderr)
+            sys.exit(1)
+
     if len(sys.argv) != 3:
         print(
             "Usage: python3 compiler.py <input.txt> <output.ll> \n"
             "OR python3 compiler.py --ast <input.txt> \n"
+            "OR python3 compiler.py --ast-checked <input.txt> \n"
             "OR python3 compiler.py --lex <input.txt> \n",
             file=sys.stderr,
         )

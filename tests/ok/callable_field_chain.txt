@@ -1,0 +1,24 @@
+struct Adder
+{
+    i32 mut acc
+    fn call := (i32 d) -> i32
+    {
+        acc := acc + d
+        exit acc
+    }
+}
+struct Holder
+{
+    Adder mut adder
+    fn step := (i32 x) -> i32
+    {
+        i32 r{adder(x)}
+        exit r
+    }
+}
+Holder mut h{{10}}
+i32 a{h.adder(5)}
+i32 b{h.step(7)}
+print(a)
+print(b)
+exit h.adder.acc

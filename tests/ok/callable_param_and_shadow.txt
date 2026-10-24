@@ -1,0 +1,22 @@
+struct Scale
+{
+    i32 k
+    fn call := (i32 v) -> i32
+    {
+        i32 r{v * k}
+        exit r
+    }
+}
+fn apply_twice := (Scale sc, i32 x) -> i32
+{
+    i32 first{sc(x)}
+    i32 second{sc(first)}
+    exit second
+}
+fn shadow_ok := (i32 v) -> i32
+{
+    exit v
+}
+Scale triple{3}
+i32 shadow_ok{apply_twice(triple, 5)}
+exit shadow_ok
