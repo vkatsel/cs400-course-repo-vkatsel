@@ -1,0 +1,12 @@
+i32 factor{10}
+i32 count{0}
+fn step := [factor, mut count](i32 x) -> i32
+{
+    count := count + 1
+    i32 r{count * factor + x}
+    exit r
+}
+print(step(1))
+print(step(2))
+print(step(3))
+exit count

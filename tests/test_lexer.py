@@ -142,5 +142,15 @@ class TestLexer(unittest.TestCase):
             lex(source)
         self.assertIn("line 1:1: expected '!=' (a single '!' is not an operator)", str(ctx.exception))
 
+    def test_lambda_square_brackets(self) -> None:
+        source = b"fn add_k := [k](i32 y) -> i32"
+        lines = lex(source)
+        self.assertEqual(len(lines), 1)
+        tokens = lines[0]
+        self.assertEqual(tokens[3], Token("operator", "[", 1, 13))
+        self.assertEqual(tokens[4], Token("identifier", "k", 1, 14))
+        self.assertEqual(tokens[5], Token("operator", "]", 1, 15))
+
+
 if __name__ == "__main__":
     unittest.main()

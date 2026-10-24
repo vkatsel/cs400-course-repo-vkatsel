@@ -1,0 +1,14 @@
+i32 mut i{1}
+i32 mut total{0}
+while i != 5
+{
+    fn step := [i](i32 base) -> i32
+    {
+        i32 r{base + i * 10}
+        exit r
+    }
+    i := i + 1
+    total := step(total)
+}
+print(total)
+exit i

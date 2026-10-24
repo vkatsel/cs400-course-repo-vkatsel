@@ -1,0 +1,1 @@
+line 11:13: cannot pass argument to 'triple' parameter 'v' of type i32 with a value of type bool
