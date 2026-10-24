@@ -1,0 +1,12 @@
+fn triple := (i32 x) -> i32
+{
+    i32 r{x * 3}
+    exit r
+}
+fn compute := [](i32 a, i32 b) -> i32
+{
+    i32 res{triple(a) + b}
+    exit res
+}
+print(compute(4, 5))
+exit compute(10, 2)

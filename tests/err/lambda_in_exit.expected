@@ -1,0 +1,1 @@
+compilation error: line 7:6: 'add_k' is a lambda and cannot be returned from exit: its type has no name

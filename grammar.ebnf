@@ -1,4 +1,4 @@
-(* Grammar for Practice 7 Language in EBNF *)
+(* Grammar for Practice 8 Language in EBNF *)
 (* Languages and Compilers Design *)
 
 program       ::= { struct_def } { fn_def } { statement } exit ;
@@ -15,7 +15,13 @@ param_list    ::= param { "," param } ;
 
 param         ::= type ident ;
 
-statement     ::= decl | assign | if_stmt | while_stmt | print_stmt ;
+statement     ::= decl | assign | if_stmt | while_stmt | print_stmt | lambda ;
+
+lambda        ::= "fn" ident ":=" "[" [ capture_list ] "]" "(" [ param_list ] ")" "->" type NL block ;
+
+capture_list  ::= capture { "," capture } ;
+
+capture       ::= ident ;
 
 decl          ::= type [ "mut" ] ident "{" init_item { "," init_item } "}" NL ;
 
