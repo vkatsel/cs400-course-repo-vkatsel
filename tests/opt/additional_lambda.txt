@@ -1,0 +1,14 @@
+fn lam_print := [](i32 x) -> i32
+{
+    print(x)
+    exit x
+}
+fn lam_pure := [](i32 x) -> i32
+{
+    i32 r{x + 1}
+    exit r
+}
+i32 t{lam_pure(5)}
+i32 u{lam_print(42)}
+exit 0
+

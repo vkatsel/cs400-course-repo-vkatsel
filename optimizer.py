@@ -26,26 +26,224 @@ from compiler import (
 )
 
 
-def has_call_or_read(expr: ExprNode) -> bool:
+class EffectAnalyzer:
+    def __init__(self, tree: ProgramNode) -> None:
+        self.tree = tree
+        self.direct_effects: set[str] = set()
+        self.call_graph: dict[str, set[str]] = {}
+
+    def _callee_key(self, node: CallNode | MemberCallNode) -> str | None:
+        match node:
+            case CallNode(rewritten_call=rewritten) if rewritten is not None:
+                return self._callee_key(rewritten)
+            case CallNode(is_this_call=True, struct_name=st, func_name=fn) if st is not None:
+                return f"mfn:{st}:{fn}"
+            case CallNode(is_this_call=False, func_name=fn):
+                return f"fn:{fn}"
+            case MemberCallNode(struct_name=st, func_name=fn) if st is not None:
+                return f"mfn:{st}:{fn}"
+            case _:
+                return None
+
+    def _analyze_body(self, key: str, body: BlockNode) -> None:
+        has_direct = False
+        callees: set[str] = set()
+
+        def walk(n: Node | None) -> None:
+            nonlocal has_direct
+            if n is None:
+                return
+            match n:
+                case PrintNode() | ReadNode() | WhileNode():
+                    has_direct = True
+                case CallNode() | MemberCallNode():
+                    callee = self._callee_key(n)
+                    if callee is not None:
+                        callees.add(callee)
+            match n:
+                case BlockNode(statements=stmts, exit=ex):
+                    for s in stmts:
+                        walk(s)
+                    walk(ex)
+                case IfNode(cond=c, then_block=tb, else_block=eb):
+                    walk(c)
+                    walk(tb)
+                    walk(eb)
+                case WhileNode(cond=c, body=b):
+                    walk(c)
+                    walk(b)
+                case PrintNode(arg=a):
+                    walk(a)
+                case ExitNode(value=v):
+                    walk(v)
+                case DeclNode(inits=inits):
+                    for init in inits:
+                        walk(init)
+                case AssignNode(value=v) | FieldAssignNode(value=v):
+                    walk(v)
+                case LambdaNode(body=b):
+                    walk(b)
+                case BinOpNode(left=l, right=r):
+                    walk(l)
+                    walk(r)
+                case NotNode(expr=e):
+                    walk(e)
+                case StructLiteralNode(inits=inits):
+                    for init in inits:
+                        walk(init)
+                case CallNode(args=args, rewritten_call=rewritten):
+                    if rewritten is not None:
+                        walk(rewritten)
+                    else:
+                        for a in args:
+                            walk(a)
+                case MemberCallNode(target=t, args=args):
+                    walk(t)
+                    for a in args:
+                        walk(a)
+                case _:
+                    pass
+
+        walk(body)
+        if has_direct:
+            self.direct_effects.add(key)
+        self.call_graph[key] = callees
+
+    def compute_effects(self) -> set[str]:
+        all_keys: list[str] = []
+        all_structs: list[StructDefNode] = list(self.tree.struct_defs)
+        if hasattr(self.tree, "lambda_struct_defs"):
+            all_structs.extend(self.tree.lambda_struct_defs)
+
+        def collect_lambdas(stmts: list[StmtNode]) -> None:
+            for s in stmts:
+                match s:
+                    case LambdaNode(struct_def=st_def, body=b):
+                        if st_def is not None and st_def not in all_structs:
+                            all_structs.append(st_def)
+                        collect_lambdas(b.statements)
+                    case IfNode(then_block=tb, else_block=eb):
+                        collect_lambdas(tb.statements)
+                        if eb is not None:
+                            collect_lambdas(eb.statements)
+                    case WhileNode(body=b):
+                        collect_lambdas(b.statements)
+                    case _:
+                        pass
+
+        collect_lambdas(self.tree.statements)
+        for fn in self.tree.fn_defs:
+            collect_lambdas(fn.body.statements)
+        for s in self.tree.struct_defs:
+            for m in s.member_fns:
+                collect_lambdas(m.body.statements)
+
+        for s in all_structs:
+            for m in s.member_fns:
+                key = f"mfn:{s.name}:{m.name}"
+                all_keys.append(key)
+                self._analyze_body(key, m.body)
+                if self._is_mutating_mfn(s.name, m.name, all_structs):
+                    self.direct_effects.add(key)
+
+        for fn in self.tree.fn_defs:
+            key = f"fn:{fn.name}"
+            all_keys.append(key)
+            self._analyze_body(key, fn.body)
+
+        effects: set[str] = set(self.direct_effects)
+
+        # Detect recursion/cycles
+        for start_k in all_keys:
+            if start_k in effects:
+                continue
+            visited: set[str] = set()
+            stack = list(self.call_graph.get(start_k, set()))
+            while stack:
+                curr = stack.pop()
+                if curr == start_k:
+                    effects.add(start_k)
+                    break
+                if curr not in visited:
+                    visited.add(curr)
+                    stack.extend(self.call_graph.get(curr, set()))
+
+        # Fixpoint propagation
+        changed = True
+        while changed:
+            changed = False
+            for caller, callees in self.call_graph.items():
+                if caller not in effects:
+                    if any(c in effects for c in callees):
+                        effects.add(caller)
+                        changed = True
+
+        return effects
+
+    def _is_mutating_mfn(self, struct_name: str, fn_name: str, structs: list[StructDefNode] | None = None) -> bool:
+        target_structs = structs if structs is not None else self.tree.struct_defs
+        for s in target_structs:
+            if s.name == struct_name:
+                for m in s.member_fns:
+                    if m.name == fn_name:
+                        return self._mfn_has_mutation(m.body)
+        return False
+
+    def _mfn_has_mutation(self, body: BlockNode) -> bool:
+        has_mut = False
+
+        def check(n: Node | None) -> None:
+            nonlocal has_mut
+            if n is None or has_mut:
+                return
+            match n:
+                case AssignNode(is_this_field=True) | FieldAssignNode(is_this_field=True):
+                    has_mut = True
+                case BlockNode(statements=stmts, exit=ex):
+                    for s in stmts:
+                        check(s)
+                    check(ex)
+                case IfNode(then_block=tb, else_block=eb):
+                    check(tb)
+                    check(eb)
+                case WhileNode(body=b):
+                    check(b)
+                case _:
+                    pass
+
+        check(body)
+        return has_mut
+
+
+def has_effect(expr: ExprNode, effect_keys: set[str]) -> bool:
     match expr:
-        case ReadNode() | CallNode() | MemberCallNode():
+        case ReadNode():
             return True
+        case CallNode(rewritten_call=rewritten) if rewritten is not None:
+            return has_effect(rewritten, effect_keys)
+        case CallNode(is_this_call=True, struct_name=st, func_name=fn) if st is not None:
+            return f"mfn:{st}:{fn}" in effect_keys
+        case CallNode(is_this_call=False, func_name=fn):
+            return f"fn:{fn}" in effect_keys
+        case MemberCallNode(struct_name=st, func_name=fn) if st is not None:
+            return f"mfn:{st}:{fn}" in effect_keys or has_effect(expr.target, effect_keys)
         case BinOpNode(left=left, right=right):
-            return has_call_or_read(left) or has_call_or_read(right)
+            return has_effect(left, effect_keys) or has_effect(right, effect_keys)
         case NotNode(expr=inner):
-            return has_call_or_read(inner)
+            return has_effect(inner, effect_keys)
         case StructLiteralNode(inits=inits):
-            return any(has_call_or_read(e) for e in inits)
+            return any(has_effect(e, effect_keys) for e in inits)
         case FieldAccessNode(target=target) if target is not None:
-            return has_call_or_read(target)
+            return has_effect(target, effect_keys)
         case _:
             return False
 
 
 class UseCounter:
-    def __init__(self) -> None:
+    def __init__(self, effect_keys: set[str]) -> None:
         self.reads: dict[int, int] = {}
         self.fn_calls: dict[str, int] = {}
+        self.effect_keys = effect_keys
 
     def read(self, decl: DeclNode | None) -> None:
         if decl is not None:
@@ -92,13 +290,13 @@ class UseCounter:
 
     def visit_decl(self, n: DeclNode) -> None:
         self.reads.setdefault(id(n), 0)
-        if any(has_call_or_read(e) for e in n.inits):
+        if any(has_effect(e, self.effect_keys) for e in n.inits):
             self.read(n)
         for e in n.inits:
             e.accept(self)
 
     def visit_assign(self, n: AssignNode) -> None:
-        if has_call_or_read(n.value):
+        if has_effect(n.value, self.effect_keys):
             self.read(n.decl)
         n.value.accept(self)
 
@@ -182,11 +380,11 @@ class Pruner:
 
 def remove_unused(tree: ProgramNode) -> ProgramNode:
     while True:
-        counter = UseCounter()
+        effects = EffectAnalyzer(tree).compute_effects()
+        counter = UseCounter(effects)
         tree.accept(counter)
         dead_vars = {d for d, k in counter.reads.items() if k == 0}
         dead_fns = {f for f, k in counter.fn_calls.items() if k == 0}
         if not dead_vars and not dead_fns:
             return tree
         Pruner(dead_vars, dead_fns).prune(tree)
-

@@ -1,0 +1,41 @@
+Program
+  Fn looper(i32 n) -> i32
+    Block
+      Decl i i32 mut
+        Const 0
+      While
+        BinOp !=
+          Var i
+          Var n
+        Block
+          Assign i
+            BinOp +
+              Var i
+              Const 1
+      Exit
+        Var i
+  Fn rec(i32 n) -> i32
+    Block
+      If
+        BinOp ==
+          Var n
+          Const 0
+        Block
+          Exit
+            Const 0
+      Decl prev i32 const
+        BinOp -
+          Var n
+          Const 1
+      Exit
+        Call rec
+          Var prev
+  Decl a i32 const
+    Call looper
+      Const 3
+  Decl b i32 const
+    Call rec
+      Const 3
+  Exit
+    Const 0
+
