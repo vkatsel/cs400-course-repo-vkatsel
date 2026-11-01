@@ -1,0 +1,8 @@
+i32 a{7}
+if a == 7
+{
+    i32 mut temp{100}
+    temp := 200
+}
+exit a
+

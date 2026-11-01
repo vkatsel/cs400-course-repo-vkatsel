@@ -20,19 +20,36 @@ fi
 
 # If no arguments or test flag, run the test runner
 if [ $# -eq 0 ] || [ "$1" = "test" ] || [ "$1" = "--tests" ] || [ "$1" = "-t" ]; then
-    exec python3 "$DIR/tests/run_tests.py"
+    shift || true
+    exec python3 "$DIR/tests/run_tests.py" "$@"
 fi
 
-# If --ast, --ast-checked, or --lex flag, run compiler directly and exit
-if [ "$1" = "--ast" ] || [ "$1" = "--ast-checked" ] || [ "$1" = "--lex" ]; then
-    exec python3 "$DIR/compiler.py" "$@"
+if [ $# -eq 1 ] && [ "$1" = "--remove-unused" ]; then
+    exec python3 "$DIR/tests/run_tests.py" --remove-unused
 fi
 
-INPUT="$1"
-OUTPUT="${2:-/tmp/output.ll}"
+# If --ast, --ast-checked, or --lex flag is present anywhere, run compiler directly and exit
+for arg in "$@"; do
+    if [ "$arg" = "--ast" ] || [ "$arg" = "--ast-checked" ] || [ "$arg" = "--lex" ]; then
+        exec python3 "$DIR/compiler.py" "$@"
+    fi
+done
+
+OPT_FLAGS=()
+POS_ARGS=()
+for arg in "$@"; do
+    if [ "$arg" = "--remove-unused" ]; then
+        OPT_FLAGS+=("--remove-unused")
+    else
+        POS_ARGS+=("$arg")
+    fi
+done
+
+INPUT="${POS_ARGS[0]}"
+OUTPUT="${POS_ARGS[1]:-/tmp/output.ll}"
 
 # Step 1: Compile to LLVM IR
-python3 "$DIR/compiler.py" "$INPUT" "$OUTPUT"
+python3 "$DIR/compiler.py" "${OPT_FLAGS[@]}" "$INPUT" "$OUTPUT"
 
 # Determine input pipe if .in file exists and stdin is a terminal
 IN_FILE="${INPUT%.*}.in"

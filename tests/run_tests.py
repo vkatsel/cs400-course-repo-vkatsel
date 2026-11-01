@@ -17,7 +17,7 @@ for _p in (
     if _p not in sys.path and Path(_p).exists():
         sys.path.insert(0, _p)
 
-from compiler import parse_ast, compile_source, CompileError
+from compiler import parse_ast, check_ast, compile_source, CompileError
 
 
 def get_python_exe() -> str:
@@ -73,11 +73,15 @@ cfunc()
     return None
 
 
-def run_single_test(test_file: Path, tmpdir: str) -> tuple[bool, str]:
+def run_single_test(test_file: Path, tmpdir: str, optimize: bool = False) -> tuple[bool, str]:
     test_name = test_file.stem
-    is_fail_test = test_name.startswith("fail") or test_file.parent.name == "err"
+    parent_name = test_file.parent.name
+    label = f"{parent_name}/{test_name}" if parent_name == "opt" else test_name
+    is_fail_test = test_name.startswith("fail") or parent_name == "err"
+    is_opt_test = parent_name == "opt"
     expected_file = test_file.with_suffix(".expected")
     ast_file = test_file.with_suffix(".ast")
+    astc_file = test_file.with_suffix(".astc")
     expected_text = (
         expected_file.read_text(encoding="utf-8").strip()
         if expected_file.exists()
@@ -87,24 +91,65 @@ def run_single_test(test_file: Path, tmpdir: str) -> tuple[bool, str]:
     try:
         content = test_file.read_bytes()
     except Exception as e:
-        return False, f"❌ FAIL: {test_name} (unable to read file: {e})"
+        return False, f"❌ FAIL: {label} (unable to read file: {e})"
 
     if is_fail_test:
         try:
-            compile_source(content)
-            return False, f"❌ FAIL: {test_name} (expected failure, but exited with 0)"
+            compile_source(content, optimize=optimize)
+            return False, f"❌ FAIL: {label} (expected failure, but exited with 0)"
         except CompileError as e:
             stderr_out = str(e)
             if expected_text and expected_text not in stderr_out:
                 msg = (
-                    f"❌ FAIL: {test_name}\n"
+                    f"❌ FAIL: {label}\n"
                     f"   Expected stderr: {expected_text}\n"
                     f"   Actual stderr:   {stderr_out}"
                 )
                 return False, msg
-            return True, f"✅ PASS: {test_name} -> {stderr_out}"
+            return True, f"✅ PASS: {label} -> {stderr_out}"
         except Exception as e:
-            return False, f"❌ FAIL: {test_name} (unexpected crash: {e})"
+            return False, f"❌ FAIL: {label} (unexpected crash: {e})"
+    elif is_opt_test:
+        if astc_file.exists():
+            try:
+                astc = check_ast(content, optimize=True)
+                expected_astc = astc_file.read_text(encoding="utf-8").strip()
+                actual_astc = astc.dump().strip()
+                if actual_astc != expected_astc:
+                    msg = (
+                        f"❌ FAIL: {label} (ASTC mismatch)\n"
+                        f"   Expected ASTC:\n{expected_astc}\n"
+                        f"   Actual ASTC:\n{actual_astc}"
+                    )
+                    return False, msg
+            except Exception as e:
+                return False, f"❌ FAIL: {label} (--remove-unused --ast-checked error: {e})"
+
+        in_file = test_file.with_suffix(".in")
+        in_path = in_file if in_file.exists() else None
+
+        for opt_mode in (False, True):
+            try:
+                mod = compile_source(content, optimize=opt_mode)
+            except CompileError as e:
+                return False, f"❌ FAIL: {label} (compilation error with optimize={opt_mode}: {e})"
+            except Exception as e:
+                return False, f"❌ FAIL: {label} (compiler crash with optimize={opt_mode}: {e})"
+
+            suffix = "opt" if opt_mode else "noopt"
+            out_ll = Path(tmpdir) / f"{test_name}_{suffix}.ll"
+            out_ll.write_text(str(mod), encoding="utf-8")
+            actual_output = run_ir(out_ll, in_path)
+            if actual_output is not None and expected_text is not None:
+                if actual_output != expected_text:
+                    msg = (
+                        f"❌ FAIL: {label} (optimize={opt_mode})\n"
+                        f"   Expected output: {expected_text}\n"
+                        f"   Actual output:   {actual_output}"
+                    )
+                    return False, msg
+
+        return True, f"✅ PASS: {label} (output: '{expected_text}' + ASTC)"
     else:
         if ast_file.exists():
             try:
@@ -113,33 +158,33 @@ def run_single_test(test_file: Path, tmpdir: str) -> tuple[bool, str]:
                 actual_ast = ast.dump().strip()
                 if actual_ast != expected_ast:
                     msg = (
-                        f"❌ FAIL: {test_name} (AST mismatch)\n"
+                        f"❌ FAIL: {label} (AST mismatch)\n"
                         f"   Expected AST:\n{expected_ast}\n"
                         f"   Actual AST:\n{actual_ast}"
                     )
                     return False, msg
             except Exception as e:
-                return False, f"❌ FAIL: {test_name} (--ast execution error: {e})"
+                return False, f"❌ FAIL: {label} (--ast execution error: {e})"
 
         try:
-            mod = compile_source(content)
+            mod = compile_source(content, optimize=optimize)
         except CompileError as e:
-            return False, f"❌ FAIL: {test_name} (compilation error: {e})"
+            return False, f"❌ FAIL: {label} (compilation error: {e})"
         except Exception as e:
-            return False, f"❌ FAIL: {test_name} (compiler crash: {e})"
+            return False, f"❌ FAIL: {label} (compiler crash: {e})"
 
         out_ll = Path(tmpdir) / f"{test_name}.ll"
         out_ll.write_text(str(mod), encoding="utf-8")
 
         if not out_ll.exists() or out_ll.stat().st_size == 0:
-            return False, f"❌ FAIL: {test_name} (no IR output generated)"
+            return False, f"❌ FAIL: {label} (no IR output generated)"
 
         in_file = test_file.with_suffix(".in")
         actual_output = run_ir(out_ll, in_file if in_file.exists() else None)
         if actual_output is not None and expected_text:
             if actual_output != expected_text:
                 msg = (
-                    f"❌ FAIL: {test_name}\n"
+                    f"❌ FAIL: {label}\n"
                     f"   Expected output: {expected_text}\n"
                     f"   Actual output:   {actual_output}"
                 )
@@ -151,7 +196,7 @@ def run_single_test(test_file: Path, tmpdir: str) -> tuple[bool, str]:
             if actual_output is not None
             else f" (IR generated{ast_info})"
         )
-        return True, f"✅ PASS: {test_name}{output_info}"
+        return True, f"✅ PASS: {label}{output_info}"
 
 
 def main() -> None:
@@ -162,15 +207,24 @@ def main() -> None:
         print(f"Error: compiler.py not found at {compiler_py}", file=sys.stderr)
         sys.exit(1)
 
+    optimize = (
+        "--remove-unused" in sys.argv[1:]
+        or os.environ.get("REMOVE_UNUSED", "").lower() in ("1", "true", "yes")
+    )
+
+    opt_dir = tests_dir / "opt"
+    opt_files = sorted(list(opt_dir.glob("*.txt"))) if opt_dir.exists() else []
     test_files = sorted(
         list((tests_dir / "ok").glob("*.txt"))
         + list((tests_dir / "err").glob("*.txt"))
-    )
+    ) + opt_files
+
     if not test_files:
         print("No test files found.")
         sys.exit(1)
 
-    print(f"Running {len(test_files)} tests...\n")
+    mode_str = " (with --remove-unused)" if optimize else ""
+    print(f"Running {len(test_files)} tests{mode_str}...\n")
 
     workers = min(8, (os.cpu_count() or 2) * 2)
     passed = 0
@@ -178,7 +232,7 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            for ok, msg in executor.map(lambda tf: run_single_test(tf, tmpdir), test_files):
+            for ok, msg in executor.map(lambda tf: run_single_test(tf, tmpdir, optimize), test_files):
                 print(msg)
                 if ok:
                     passed += 1

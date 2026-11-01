@@ -3713,95 +3713,219 @@ class CodeGenVisitor:
         node.exit.accept(self)
 
 
+def has_call_or_read(expr: ExprNode) -> bool:
+    match expr:
+        case ReadNode() | CallNode() | MemberCallNode():
+            return True
+        case BinOpNode(left=left, right=right):
+            return has_call_or_read(left) or has_call_or_read(right)
+        case NotNode(expr=inner):
+            return has_call_or_read(inner)
+        case StructLiteralNode(inits=inits):
+            return any(has_call_or_read(e) for e in inits)
+        case FieldAccessNode(target=target) if target is not None:
+            return has_call_or_read(target)
+        case _:
+            return False
+
+
+class UseCounter:
+    def __init__(self) -> None:
+        self.reads: dict[int, int] = {}
+
+    def read(self, decl: DeclNode | None) -> None:
+        if decl is not None:
+            self.reads[id(decl)] = self.reads.get(id(decl), 0) + 1
+
+    def _noop(self, _: Node) -> None:
+        pass
+
+    visit_const = visit_bool = visit_read = visit_string_literal = _noop
+
+    def visit_var(self, n: VarNode) -> None:
+        self.read(n.decl)
+
+    def visit_field_access(self, n: FieldAccessNode) -> None:
+        if n.target is not None:
+            n.target.accept(self)
+        else:
+            self.read(n.decl)
+
+    def visit_struct_literal(self, n: StructLiteralNode) -> None:
+        for e in n.inits:
+            e.accept(self)
+
+    def visit_call(self, n: CallNode) -> None:
+        if n.rewritten_call is not None:
+            n.rewritten_call.accept(self)
+        else:
+            for a in n.args:
+                a.accept(self)
+
+    def visit_member_call(self, n: MemberCallNode) -> None:
+        n.target.accept(self)
+        for a in n.args:
+            a.accept(self)
+
+    def visit_binop(self, n: BinOpNode) -> None:
+        n.left.accept(self)
+        n.right.accept(self)
+
+    def visit_not(self, n: NotNode) -> None:
+        n.expr.accept(self)
+
+    def visit_decl(self, n: DeclNode) -> None:
+        self.reads.setdefault(id(n), 0)
+        if any(has_call_or_read(e) for e in n.inits):
+            self.read(n)
+        for e in n.inits:
+            e.accept(self)
+
+    def visit_assign(self, n: AssignNode) -> None:
+        if has_call_or_read(n.value):
+            self.read(n.decl)
+        n.value.accept(self)
+
+    visit_field_assign = visit_assign
+
+    def visit_exit(self, n: ExitNode) -> None:
+        n.value.accept(self)
+
+    def visit_print(self, n: PrintNode) -> None:
+        n.arg.accept(self)
+
+    def visit_block(self, n: BlockNode) -> None:
+        for s in n.statements:
+            s.accept(self)
+        if n.exit is not None:
+            n.exit.accept(self)
+
+    def visit_if(self, n: IfNode) -> None:
+        n.cond.accept(self)
+        n.then_block.accept(self)
+        if n.else_block is not None:
+            n.else_block.accept(self)
+
+    def visit_while(self, n: WhileNode) -> None:
+        n.cond.accept(self)
+        n.body.accept(self)
+
+    def visit_lambda(self, n: LambdaNode) -> None:
+        if n.decl_node is not None:
+            for e in n.decl_node.inits:
+                e.accept(self)
+        n.body.accept(self)
+
+    def visit_struct_def(self, n: StructDefNode) -> None:
+        for fn in n.member_fns:
+            fn.accept(self)
+
+    def visit_fn_def(self, n: FnDefNode) -> None:
+        n.body.accept(self)
+
+    visit_member_fn = visit_fn_def
+
+    def visit_program(self, n: ProgramNode) -> None:
+        for item in (*n.struct_defs, *n.fn_defs, *n.statements, n.exit):
+            item.accept(self)
+
+
+class Pruner:
+    def __init__(self, dead: set[int]) -> None:
+        self.dead = dead
+
+    def prune_stmts(self, stmts: list[StmtNode]) -> list[StmtNode]:
+        kept: list[StmtNode] = []
+        for s in stmts:
+            match s:
+                case DeclNode() if id(s) in self.dead:
+                    continue
+                case AssignNode(decl=d) | FieldAssignNode(decl=d) if d is not None and id(d) in self.dead:
+                    continue
+                case IfNode(then_block=tb, else_block=eb):
+                    tb.statements = self.prune_stmts(tb.statements)
+                    if eb is not None:
+                        eb.statements = self.prune_stmts(eb.statements)
+                case WhileNode(body=b) | LambdaNode(body=b):
+                    b.statements = self.prune_stmts(b.statements)
+            kept.append(s)
+        return kept
+
+    def prune(self, tree: ProgramNode) -> None:
+        for s in tree.struct_defs:
+            for m in s.member_fns:
+                m.body.statements = self.prune_stmts(m.body.statements)
+        for fn in tree.fn_defs:
+            fn.body.statements = self.prune_stmts(fn.body.statements)
+        tree.statements = self.prune_stmts(tree.statements)
+
+
+def remove_unused(tree: ProgramNode) -> ProgramNode:
+    while True:
+        counter = UseCounter()
+        tree.accept(counter)
+        dead = {d for d, k in counter.reads.items() if k == 0}
+        if not dead:
+            return tree
+        Pruner(dead).prune(tree)
+
+
 def parse_ast(source_bytes: bytes) -> ProgramNode:
-    token_lines = lex(source_bytes)
-    return Parser(token_lines).parse_program()
+    return Parser(lex(source_bytes)).parse_program()
 
 
-def check_ast(source_bytes: bytes) -> ProgramNode:
+def check_ast(source_bytes: bytes, *, optimize: bool = False) -> ProgramNode:
     ast = parse_ast(source_bytes)
-    checker = SemanticChecker()
-    checker.visit_program(ast)
-    return ast
+    SemanticChecker().visit_program(ast)
+    return remove_unused(ast) if optimize else ast
 
 
-def compile_source(source_bytes: bytes) -> ir.Module:
-    ast = check_ast(source_bytes)
-    context = ir.Context()
-    module = ir.Module(name="practice6", context=context)
+def compile_source(source_bytes: bytes, *, optimize: bool = False) -> ir.Module:
+    ast = check_ast(source_bytes, optimize=optimize)
+    module = ir.Module(name="practice6", context=ir.Context())
     module.triple = llvm.get_default_triple()
-
-    codegen = CodeGenVisitor(module)
-    codegen.visit_program(ast)
+    CodeGenVisitor(module).visit_program(ast)
     return module
 
 
 def main() -> None:
-    if len(sys.argv) == 3 and sys.argv[1] == "--lex":
-        try:
-            with open(sys.argv[2], "rb") as f:
-                tokens = lex(f.read())
-            print_tokens(tokens)
-            sys.exit(0)
-        except CompileError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-        except FileNotFoundError:
-            print(f"Error: file '{sys.argv[2]}' not found", file=sys.stderr)
-            sys.exit(1)
+    known_flags = {"--lex", "--ast", "--ast-checked", "--remove-unused"}
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    positional = [a for a in sys.argv[1:] if not a.startswith("--")]
+    optimize = "--remove-unused" in flags
+    mode_flags = flags - {"--remove-unused"}
+    expected_pos = 1 if mode_flags else 2
 
-    if len(sys.argv) == 3 and sys.argv[1] == "--ast":
-        try:
-            with open(sys.argv[2], "rb") as f:
-                content = f.read()
-            ast = parse_ast(content)
-            print(ast.dump())
-            sys.exit(0)
-        except CompileError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-        except FileNotFoundError:
-            print(f"Error: file '{sys.argv[2]}' not found", file=sys.stderr)
-            sys.exit(1)
-
-    if len(sys.argv) == 3 and sys.argv[1] == "--ast-checked":
-        try:
-            with open(sys.argv[2], "rb") as f:
-                content = f.read()
-            ast = check_ast(content)
-            print(ast.dump())
-            sys.exit(0)
-        except CompileError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-        except FileNotFoundError:
-            print(f"Error: file '{sys.argv[2]}' not found", file=sys.stderr)
-            sys.exit(1)
-
-    if len(sys.argv) != 3:
+    if not flags <= known_flags or len(mode_flags) > 1 or len(positional) != expected_pos:
         print(
-            "Usage: python3 compiler.py <input.txt> <output.ll> \n"
-            "OR python3 compiler.py --ast <input.txt> \n"
-            "OR python3 compiler.py --ast-checked <input.txt> \n"
-            "OR python3 compiler.py --lex <input.txt> \n",
+            "Usage: python3 compiler.py [--remove-unused] <input.txt> <output.ll>\n"
+            "OR python3 compiler.py [--remove-unused] --ast-checked <input.txt>\n"
+            "OR python3 compiler.py --ast <input.txt>\n"
+            "OR python3 compiler.py --lex <input.txt>",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    input_file = sys.argv[1]
-    output_file = sys.argv[2]
-
+    input_file = positional[0]
     try:
         with open(input_file, "rb") as f:
             content = f.read()
-        module = compile_source(content)
-        with open(output_file, "w", encoding="utf-8") as f:
-            f.write(str(module))
+        if "--lex" in mode_flags:
+            print_tokens(lex(content))
+        elif "--ast" in mode_flags:
+            print(parse_ast(content).dump())
+        elif "--ast-checked" in mode_flags:
+            print(check_ast(content, optimize=optimize).dump())
+        else:
+            module = compile_source(content, optimize=optimize)
+            with open(positional[1], "w", encoding="utf-8") as f:
+                f.write(str(module))
     except CompileError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
     except FileNotFoundError:
-        print(f"compilation error: file '{input_file}' not found", file=sys.stderr)
+        prefix = "Error" if mode_flags else "compilation error"
+        print(f"{prefix}: file '{input_file}' not found", file=sys.stderr)
         sys.exit(1)
 
 
