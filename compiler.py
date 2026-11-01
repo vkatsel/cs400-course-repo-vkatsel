@@ -7,7 +7,7 @@ from lexer import CompileError, Token, lex, print_tokens
 from llvmlite import ir
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, weakref_slot=True)
 class Node:
     line: int
     col: int
@@ -3054,6 +3054,7 @@ class SemanticChecker:
 
         # Check mutation rules across all AST call sites
         self.check_mutation_rules_program(node)
+        self.scopes.clear()
 
 
 class CodeGenVisitor:
