@@ -1,0 +1,65 @@
+struct Multiplier
+{
+    i32 factor
+    fn call := (i32 x) -> i32
+    {
+        i32 r{x * factor}
+        exit r
+    }
+}
+
+struct Pipeline
+{
+    Multiplier op
+    fn run := (i32 val) -> i32
+    {
+        i32 r{op(val)}
+        exit r
+    }
+}
+
+fn apply_twice := (Multiplier m, i32 x) -> i32
+{
+    i32 first{m(x)}
+    i32 second{m.call(first)}
+    exit second
+}
+
+Multiplier mul3{3}
+print(mul3(10))
+print(mul3.call(10))
+Pipeline pipe{mul3}
+print(pipe.op(5))
+print(pipe.run(7))
+print(apply_twice(mul3, 2))
+
+i32 mut threshold{100}
+fn check_limit := [threshold](i32 v) -> bool
+{
+    bool ok{v == threshold}
+    exit ok
+}
+threshold := 999
+print(check_limit(100))
+print(check_limit(999))
+
+i32 mut seed{0}
+fn counter := [mut seed]() -> i32
+{
+    seed := seed + 1
+    exit seed
+}
+print(counter())
+print(counter())
+
+fn branch_a := [mut counter]() -> i32
+{
+    i32 a{counter()}
+    i32 b{counter()}
+    i32 r{a * 10 + b}
+    exit r
+}
+print(branch_a())
+print(counter())
+print(seed)
+exit counter()

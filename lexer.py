@@ -170,7 +170,7 @@ def lex(data: bytes) -> list[list[Token]]:
                         start_line, start_col = line, col
                         i += 1
                         col += 1
-                    case 40 | 41:  # '(', ')'
+                    case 40 | 41 | 91 | 93:  # '(', ')', '[', ']'
                         tokens.append(Token("operator", chr(b), line, col))
                         i += 1
                         col += 1

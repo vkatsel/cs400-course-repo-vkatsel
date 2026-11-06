@@ -106,9 +106,15 @@ class CallNode(ExprNode):
     args: list[ExprNode]
     is_this_call: bool = field(default=False, init=False)
     struct_name: str | None = field(default=None, init=False)
+    rewritten_call: "MemberCallNode | None" = field(default=None, init=False)
 
     def dump(self, indent: int = 0) -> str:
         prefix = " " * (indent * 2)
+        if self.rewritten_call is not None:
+            lines = [f"{prefix}CallableCall {self.func_name}"]
+            for a in self.args:
+                lines.append(a.dump(indent + 1))
+            return "\n".join(lines)
         lines = [f"{prefix}Call {self.func_name}"]
         for a in self.args:
             lines.append(a.dump(indent + 1))
@@ -125,9 +131,17 @@ class MemberCallNode(ExprNode):
     args: list[ExprNode]
     dot_loc: tuple[int, int] | None = None
     struct_name: str | None = field(default=None, init=False)
+    is_callable_call: bool = field(default=False, init=False)
+    callable_name: str | None = field(default=None, init=False)
 
     def dump(self, indent: int = 0) -> str:
         prefix = " " * (indent * 2)
+        if self.is_callable_call:
+            lines = [f"{prefix}CallableCall {self.callable_name or self.func_name}"]
+            lines.append(self.target.dump(indent + 1))
+            for a in self.args:
+                lines.append(a.dump(indent + 1))
+            return "\n".join(lines)
         lines = [f"{prefix}MemberCall {self.func_name}"]
         lines.append(self.target.dump(indent + 1))
         for a in self.args:
@@ -405,11 +419,49 @@ class PrintNode(StmtNode):
 
 
 @dataclass(slots=True)
+class CaptureDef:
+    name: str
+    mutable: bool
+    line: int
+    col: int
+
+
+@dataclass(slots=True)
+class LambdaNode(StmtNode):
+    name: str
+    captures: list[CaptureDef]
+    params: list[ParamDef]
+    return_type: str
+    body: BlockNode
+    struct_def: StructDefNode | None = field(default=None, init=False)
+    decl_node: DeclNode | None = field(default=None, init=False)
+
+    def dump(self, indent: int = 0) -> str:
+        prefix = " " * (indent * 2)
+        lines = [f"{prefix}Lambda {self.name} -> {self.return_type}"]
+        if self.struct_def is not None and self.decl_node is not None:
+            lines.append(self.struct_def.dump(indent + 1))
+            lines.append(self.decl_node.dump(indent + 1))
+        else:
+            for cap in self.captures:
+                mut_str = "mut" if cap.mutable else "const"
+                lines.append(f"{' ' * ((indent + 1) * 2)}Capture {cap.name} {mut_str}")
+            for p in self.params:
+                lines.append(f"{' ' * ((indent + 1) * 2)}Param {p.name} {p.type_name}")
+            lines.append(self.body.dump(indent + 1))
+        return "\n".join(lines)
+
+    def accept(self, visitor: Any) -> Any:
+        return visitor.visit_lambda(self)
+
+
+@dataclass(slots=True)
 class ProgramNode(Node):
     struct_defs: list[StructDefNode]
     fn_defs: list[FnDefNode]
     statements: list[StmtNode]
     exit: ExitNode
+    lambda_struct_defs: list[StructDefNode] = field(default_factory=list, init=False)
 
     def dump(self, indent: int = 0) -> str:
         lines = ["Program"]
@@ -1138,6 +1190,12 @@ class Parser:
         if open_paren is None:
             line_no, col = self._end_of_line_loc()
             raise CompileError(line_no, col, "expected '(' after ':=', found end of line")
+        if open_paren.text == "[":
+            raise CompileError(
+                open_paren.line,
+                open_paren.col,
+                "a member function cannot have a capture list",
+            )
         if open_paren.text != "(":
             raise CompileError(
                 open_paren.line,
@@ -1250,6 +1308,207 @@ class Parser:
 
         return FnDefNode(name_tok.line, name_tok.col, name_tok.text, params, ret_type, body)
 
+    def _is_lambda_line(self, line: list[Token]) -> bool:
+        return (
+            len(line) >= 4
+            and line[0].text == "fn"
+            and line[2].text == ":="
+            and line[3].text == "["
+        )
+
+    def parse_lambda(self) -> LambdaNode:
+        line = self.current_line()
+        assert line is not None
+        self.eat()
+
+        name_tok = self.peek()
+        if name_tok is None:
+            line_no, col = self._end_of_line_loc()
+            raise CompileError(line_no, col, "expected lambda name, found end of line")
+        if name_tok.text in ("read", "print"):
+            raise CompileError(
+                name_tok.line,
+                name_tok.col,
+                f"cannot use reserved keyword '{name_tok.text}' as a lambda name",
+            )
+        if not name_tok.is_identifier:
+            raise CompileError(
+                name_tok.line,
+                name_tok.col,
+                f"expected lambda name, got '{name_tok.text}'",
+            )
+        self.eat()
+
+        assign_tok = self.peek()
+        assert assign_tok is not None and assign_tok.text == ":="
+        self.eat()
+
+        open_bracket = self.peek()
+        assert open_bracket is not None and open_bracket.text == "["
+        self.eat()
+
+        captures: list[CaptureDef] = []
+        if self.peek() is not None and self.peek().text != "]":
+            while True:
+                is_mut = False
+                if self.peek() is not None and self.peek().text == "mut":
+                    self.eat()
+                    is_mut = True
+
+                cap_tok = self.peek()
+                if cap_tok is None:
+                    line_no, col = self._end_of_line_loc()
+                    raise CompileError(line_no, col, "expected capture name, found end of line")
+                if cap_tok.text in ("read", "print"):
+                    raise CompileError(
+                        cap_tok.line,
+                        cap_tok.col,
+                        f"cannot use reserved keyword '{cap_tok.text}' as a capture name",
+                    )
+                if not cap_tok.is_identifier:
+                    raise CompileError(
+                        cap_tok.line,
+                        cap_tok.col,
+                        f"expected capture name, got '{cap_tok.text}'",
+                    )
+                self.eat()
+                captures.append(
+                    CaptureDef(cap_tok.text, is_mut, cap_tok.line, cap_tok.col)
+                )
+
+                if self.peek() is not None and self.peek().text == ",":
+                    self.eat()
+                else:
+                    break
+
+        close_bracket = self.peek()
+        if close_bracket is None:
+            line_no, col = self._end_of_line_loc()
+            raise CompileError(line_no, col, "expected ']' after capture list, found end of line")
+        if close_bracket.text != "]":
+            raise CompileError(
+                close_bracket.line,
+                close_bracket.col,
+                f"expected ']' after capture list, got '{close_bracket.text}'",
+            )
+        self.eat()
+
+        open_paren = self.peek()
+        if open_paren is None:
+            line_no, col = self._end_of_line_loc()
+            raise CompileError(line_no, col, "expected '(' after capture list, found end of line")
+        if open_paren.text != "(":
+            raise CompileError(
+                open_paren.line,
+                open_paren.col,
+                f"expected '(' after capture list, got '{open_paren.text}'",
+            )
+        self.eat()
+
+        params: list[ParamDef] = []
+        param_names: set[str] = set()
+
+        if self.peek() is not None and self.peek().text != ")":
+            while True:
+                type_tok = self.peek()
+                if type_tok is None:
+                    line_no, col = self._end_of_line_loc()
+                    raise CompileError(line_no, col, "expected parameter type, found end of line")
+                if not (type_tok.text in ("i32", "i64", "bool") or type_tok.is_identifier):
+                    raise CompileError(
+                        type_tok.line,
+                        type_tok.col,
+                        f"expected parameter type, got '{type_tok.text}'",
+                    )
+                self.eat()
+
+                pname_tok = self.peek()
+                if pname_tok is None:
+                    line_no, col = self._end_of_line_loc()
+                    raise CompileError(line_no, col, "expected parameter name, found end of line")
+                if pname_tok.text in ("read", "print"):
+                    raise CompileError(
+                        pname_tok.line,
+                        pname_tok.col,
+                        f"cannot use reserved keyword '{pname_tok.text}' as a parameter name",
+                    )
+                if not pname_tok.is_identifier:
+                    raise CompileError(
+                        pname_tok.line,
+                        pname_tok.col,
+                        f"expected parameter name, got '{pname_tok.text}'",
+                    )
+                self.eat()
+
+                if pname_tok.text in param_names:
+                    raise CompileError(
+                        pname_tok.line,
+                        pname_tok.col,
+                        f"parameter '{pname_tok.text}' is already declared",
+                    )
+                param_names.add(pname_tok.text)
+                params.append(
+                    ParamDef(pname_tok.text, type_tok.text, pname_tok.line, pname_tok.col)
+                )
+
+                if self.peek() is not None and self.peek().text == ",":
+                    self.eat()
+                else:
+                    break
+
+        close_paren = self.peek()
+        if close_paren is None:
+            line_no, col = self._end_of_line_loc()
+            raise CompileError(line_no, col, "expected ')' after parameter list, found end of line")
+        if close_paren.text != ")":
+            raise CompileError(
+                close_paren.line,
+                close_paren.col,
+                f"expected ')' after parameter list, got '{close_paren.text}'",
+            )
+        self.eat()
+
+        arrow = self.peek()
+        if arrow is None:
+            line_no, col = self._end_of_line_loc()
+            raise CompileError(line_no, col, "expected '->' after parameter list, found end of line")
+        if arrow.text != "->":
+            raise CompileError(
+                arrow.line,
+                arrow.col,
+                f"expected '->' after parameter list, got '{arrow.text}'",
+            )
+        self.eat()
+
+        ret_type_tok = self.peek()
+        if ret_type_tok is None:
+            line_no, col = self._end_of_line_loc()
+            raise CompileError(line_no, col, "expected return type, found end of line")
+        if not (ret_type_tok.text in ("i32", "i64", "bool") or ret_type_tok.is_identifier):
+            raise CompileError(
+                ret_type_tok.line,
+                ret_type_tok.col,
+                f"expected return type, got '{ret_type_tok.text}'",
+            )
+        self.eat()
+        ret_type = ret_type_tok.text
+
+        if (extra := self.peek()) is not None:
+            raise CompileError(
+                extra.line, extra.col, f"unexpected '{extra.text}' after lambda signature"
+            )
+
+        self.next_line()
+        body = self.parse_block(context="after lambda signature")
+        if body.exit is None:
+            raise CompileError(
+                body.line,
+                body.col,
+                f"lambda '{name_tok.text}' must end with an exit statement",
+            )
+
+        return LambdaNode(name_tok.line, name_tok.col, name_tok.text, captures, params, ret_type, body)
+
     def parse_print(self) -> PrintNode:
         print_tok = self.eat()
         open_paren = self.peek()
@@ -1335,6 +1594,8 @@ class Parser:
         if tok.text == "struct":
             raise CompileError(tok.line, tok.col, "struct declaration after statement")
         if tok.text == "fn":
+            if self._is_lambda_line(self.toks):
+                return self.parse_lambda()
             raise CompileError(tok.line, tok.col, "function declaration after statement")
         raise CompileError(
             tok.line, tok.col, f"cannot start a statement with '{tok.text}'"
@@ -1361,6 +1622,8 @@ class Parser:
             line = self.current_line()
             first_tok = line[0]
             if first_tok.text == "fn":
+                if self._is_lambda_line(line):
+                    break
                 fn_node = self.parse_fn_def()
                 fn_defs.append(fn_node)
             elif first_tok.text == "struct":
@@ -1425,6 +1688,7 @@ class StructInfo:
     member_fns: dict[str, MemberFnInfo]
     line: int
     col: int
+    is_lambda: bool = False
 
 
 @dataclass(slots=True)
@@ -1444,12 +1708,38 @@ class SemanticChecker:
         self.current_fn: FnInfo | None = None
         self.current_struct: StructInfo | None = None
         self.current_member_fn: MemberFnInfo | None = None
+        self.program_node: ProgramNode | None = None
+        self.enclosing_envs: list[tuple[list[dict[str, DeclNode]], StructInfo | None]] = []
+        self.current_lambda_name: str | None = None
 
     def lookup(self, name: str) -> DeclNode | None:
         for frame in reversed(self.scopes):
             if name in frame:
                 return frame[name]
         return None
+
+    def is_lambda_type(self, type_name: str | None) -> bool:
+        return (
+            type_name is not None
+            and type_name in self.structs
+            and self.structs[type_name].is_lambda
+        )
+
+    def _lambda_display_name(self, expr: ExprNode, type_name: str | None) -> str:
+        if isinstance(expr, VarNode):
+            return expr.name
+        if type_name is not None and type_name.startswith("lambda."):
+            return type_name.split(".")[1]
+        return type_name or "lambda"
+
+    def is_in_enclosing_env(self, name: str) -> bool:
+        for scopes, struct_info in reversed(self.enclosing_envs):
+            for frame in reversed(scopes):
+                if name in frame:
+                    return True
+            if struct_info is not None and name in struct_info.fields_by_name:
+                return True
+        return False
 
     def is_deeply_mutable(self, type_name: str) -> bool:
         if type_name in ("i32", "i64", "bool"):
@@ -1582,6 +1872,12 @@ class SemanticChecker:
             node.field_info = f_info
             node.type = f_info.type_name
             return node.type
+        if self.current_lambda_name is not None and self.is_in_enclosing_env(node.name):
+            raise CompileError(
+                node.line,
+                node.col,
+                f"'{node.name}' is not captured by lambda '{self.current_lambda_name}': add it to the capture list, [{node.name}]",
+            )
         raise CompileError(
             node.line,
             node.col,
@@ -1602,6 +1898,12 @@ class SemanticChecker:
                 node.this_field_info = f_info
                 curr_type = f_info.type_name
             else:
+                if self.current_lambda_name is not None and self.is_in_enclosing_env(node.obj_name):
+                    raise CompileError(
+                        node.line,
+                        node.col,
+                        f"'{node.obj_name}' is not captured by lambda '{self.current_lambda_name}': add it to the capture list, [{node.obj_name}]",
+                    )
                 raise CompileError(
                     node.line,
                     node.col,
@@ -1610,6 +1912,12 @@ class SemanticChecker:
 
         indices: list[int] = []
         for field_name in node.fields:
+            if self.is_lambda_type(curr_type):
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"cannot access capture '{field_name}' of lambda '{node.obj_name}'",
+                )
             if curr_type not in self.structs:
                 err_line, err_col = node.dot_loc if node.dot_loc is not None else (node.line, node.col)
                 raise CompileError(
@@ -1639,6 +1947,11 @@ class SemanticChecker:
             if lt == "bool" or rt == "bool":
                 raise CompileError(
                     node.line, node.col, f"cannot apply '{node.op}' to bool"
+                )
+            if lt not in ("i32", "i64") or rt not in ("i32", "i64"):
+                bad_type = lt if lt not in ("i32", "i64") else rt
+                raise CompileError(
+                    node.line, node.col, f"cannot apply '{node.op}' to {bad_type}"
                 )
             node.type = "i64" if (lt == "i64" or rt == "i64") else "i32"
             return node.type
@@ -1678,6 +1991,13 @@ class SemanticChecker:
 
     def visit_print(self, node: PrintNode) -> None:
         arg_type = node.arg.accept(self)
+        if self.is_lambda_type(arg_type):
+            lam_name = self._lambda_display_name(node.arg, arg_type)
+            raise CompileError(
+                node.arg.line,
+                node.arg.col,
+                f"'{lam_name}' is a lambda and cannot be printed: its type has no name",
+            )
         if arg_type not in ("i32", "i64", "bool", "string") and arg_type not in self.structs:
             raise CompileError(node.arg.line, node.arg.col, f"cannot print value of type '{arg_type}'")
 
@@ -1693,6 +2013,13 @@ class SemanticChecker:
         self, expr: ExprNode, want: str, at: Node, what: str
     ) -> None:
         have = expr.type
+        if self.is_lambda_type(have):
+            lam_name = self._lambda_display_name(expr, have)
+            raise CompileError(
+                expr.line,
+                expr.col,
+                f"'{lam_name}' is a lambda and cannot {what}: its type has no name",
+            )
         if have == want or (have == "i32" and want == "i64"):
             return
         if isinstance(expr, ConstNode) and want == "i32" and have == "i64":
@@ -1710,7 +2037,7 @@ class SemanticChecker:
     def visit_decl(self, node: DeclNode) -> None:
         if (
             node.type_name not in ("i32", "i64", "bool")
-            and node.type_name not in self.structs
+            and (node.type_name not in self.structs or self.is_lambda_type(node.type_name))
         ):
             raise CompileError(node.line, node.col, f"unknown type '{node.type_name}'")
 
@@ -1737,6 +2064,13 @@ class SemanticChecker:
             s_info = self.structs[node.type_name]
             if len(node.inits) == 1 and not isinstance(node.inits[0], StructLiteralNode):
                 init_type = node.inits[0].accept(self)
+                if self.is_lambda_type(init_type):
+                    lam_name = self._lambda_display_name(node.inits[0], init_type)
+                    raise CompileError(
+                        node.inits[0].line,
+                        node.inits[0].col,
+                        f"'{lam_name}' is a lambda and cannot initialise '{node.name}': its type has no name",
+                    )
                 if init_type == node.type_name:
                     pass
                 elif len(s_info.fields) == 1:
@@ -1805,15 +2139,202 @@ class SemanticChecker:
         assert node.type is not None
         return node.type
 
+    def visit_lambda(self, node: LambdaNode) -> None:
+        if node.name in ("i32", "i64", "bool"):
+            raise CompileError(
+                node.line, node.col, f"cannot name lambda with built-in type '{node.name}'"
+            )
+        if node.name in self.structs:
+            raise CompileError(
+                node.line, node.col, f"lambda '{node.name}' clashes with struct '{node.name}'"
+            )
+
+        top_frame = self.scopes[-1]
+        if node.name in top_frame:
+            if len(self.scopes) > 1:
+                msg = f"variable '{node.name}' is already declared in this block"
+            else:
+                msg = f"variable '{node.name}' is already declared"
+            raise CompileError(node.line, node.col, msg)
+
+        seen_captures: set[str] = set()
+        captured_types: list[str] = []
+        for cap in node.captures:
+            if cap.name in seen_captures:
+                raise CompileError(
+                    cap.line,
+                    cap.col,
+                    f"'{cap.name}' is captured twice",
+                )
+            seen_captures.add(cap.name)
+
+            decl = self.lookup(cap.name)
+            if decl is not None:
+                captured_types.append(decl.type_name)
+            elif self.current_struct is not None and cap.name in self.current_struct.fields_by_name:
+                captured_types.append(self.current_struct.fields_by_name[cap.name].type_name)
+            else:
+                raise CompileError(
+                    cap.line,
+                    cap.col,
+                    f"cannot capture '{cap.name}': no variable '{cap.name}' is visible here",
+                )
+
+        for p in node.params:
+            if p.name in seen_captures:
+                raise CompileError(
+                    p.line,
+                    p.col,
+                    f"parameter '{p.name}' has the same name as a capture",
+                )
+            if (
+                p.type_name not in ("i32", "i64", "bool")
+                and (p.type_name not in self.structs or self.is_lambda_type(p.type_name))
+            ):
+                raise CompileError(
+                    p.line,
+                    p.col,
+                    f"unknown parameter type '{p.type_name}' in lambda '{node.name}'",
+                )
+
+        if (
+            node.return_type not in ("i32", "i64", "bool")
+            and (node.return_type not in self.structs or self.is_lambda_type(node.return_type))
+        ):
+            raise CompileError(
+                node.line,
+                node.col,
+                f"unknown return type '{node.return_type}' in lambda '{node.name}'",
+            )
+
+        base_struct_name = f"lambda.{node.name}"
+        struct_name = base_struct_name
+        suffix = 1
+        while struct_name in self.structs:
+            suffix += 1
+            struct_name = f"{base_struct_name}.{suffix}"
+
+        field_defs: list[FieldDef] = []
+        field_infos: list[FieldInfo] = []
+        fields_by_name: dict[str, FieldInfo] = {}
+        for idx, (cap, cap_type) in enumerate(zip(node.captures, captured_types)):
+            f_def = FieldDef(cap.name, cap_type, cap.mutable, cap.line, cap.col)
+            f_info = FieldInfo(cap.name, cap_type, cap.mutable, idx, cap.line, cap.col)
+            field_defs.append(f_def)
+            field_infos.append(f_info)
+            fields_by_name[cap.name] = f_info
+
+        call_fn_node = MemberFnNode(
+            node.line,
+            node.col,
+            "call",
+            node.params,
+            node.return_type,
+            node.body,
+        )
+        call_m_info = MemberFnInfo(
+            "call",
+            struct_name,
+            node.params,
+            node.return_type,
+            False,
+            node.line,
+            node.col,
+            call_fn_node,
+        )
+        struct_def_node = StructDefNode(
+            node.line,
+            node.col,
+            struct_name,
+            field_defs,
+            [call_fn_node],
+        )
+        lambda_struct_info = StructInfo(
+            struct_name,
+            field_infos,
+            fields_by_name,
+            {"call": call_m_info},
+            node.line,
+            node.col,
+            is_lambda=True,
+        )
+        self.structs[struct_name] = lambda_struct_info
+
+        saved_scopes = self.scopes
+        saved_struct = self.current_struct
+        saved_member_fn = self.current_member_fn
+        saved_fn = self.current_fn
+        saved_lambda_name = self.current_lambda_name
+
+        self.enclosing_envs.append((saved_scopes, saved_struct))
+        self.current_struct = lambda_struct_info
+        self.current_member_fn = call_m_info
+        self.current_fn = None
+        self.current_lambda_name = node.name
+        self.scopes = [{}]
+        for p in node.params:
+            p_decl = DeclNode(p.line, p.col, p.name, p.type_name, mutable=False, inits=[])
+            p.decl = p_decl
+            self.scopes[0][p.name] = p_decl
+
+        node.body.accept(self)
+
+        self.enclosing_envs.pop()
+        self.scopes = saved_scopes
+        self.current_struct = saved_struct
+        self.current_member_fn = saved_member_fn
+        self.current_fn = saved_fn
+        self.current_lambda_name = saved_lambda_name
+
+        if not call_m_info.is_mutating:
+            for callee_struct, callee_name in call_m_info.called_member_fns:
+                if self.structs[callee_struct].member_fns[callee_name].is_mutating:
+                    call_m_info.is_mutating = True
+                    break
+
+        inits: list[ExprNode] = []
+        for cap in node.captures:
+            v_node = VarNode(cap.line, cap.col, cap.name)
+            v_node.accept(self)
+            inits.append(v_node)
+
+        is_decl_mut = any(cap.mutable for cap in node.captures)
+        decl_node = DeclNode(
+            node.line,
+            node.col,
+            node.name,
+            struct_name,
+            mutable=is_decl_mut,
+            inits=inits,
+        )
+        self.scopes[-1][node.name] = decl_node
+        node.struct_def = struct_def_node
+        node.decl_node = decl_node
+        assert self.program_node is not None
+        self.program_node.lambda_struct_defs.append(struct_def_node)
+
     def visit_assign(self, node: AssignNode) -> None:
         decl = self.lookup(node.name)
         if decl is not None:
             node.decl = decl
+            if self.is_lambda_type(decl.type_name):
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"cannot assign to '{node.name}': it is a lambda",
+                )
             if not node.decl.mutable:
                 raise CompileError(
                     node.line, node.col, f"cannot assign to '{node.name}': it is not mut"
                 )
             node.value.accept(self)
+            if self.is_lambda_type(node.value.type):
+                lam_name = self._lambda_display_name(node.value, node.value.type)
+                raise CompileError(
+                    node.value.line,
+                    node.value.col,
+                    f"'{lam_name}' is a lambda and cannot be assigned to '{node.name}': its type has no name",
+                )
             if decl.type_name in self.structs:
                 if node.value.type != decl.type_name:
                     raise CompileError(
@@ -1836,14 +2357,33 @@ class SemanticChecker:
         if self.current_struct is not None and node.name in self.current_struct.fields_by_name:
             f_info = self.current_struct.fields_by_name[node.name]
             if not f_info.mutable:
+                if self.current_struct.is_lambda:
+                    raise CompileError(
+                        node.line,
+                        node.col,
+                        f"cannot assign to '{node.name}': the capture '{node.name}' is const, write [mut {node.name}]",
+                    )
                 raise CompileError(
                     node.line, node.col, f"cannot assign to const field '{node.name}' inside member function"
+                )
+            if self.is_lambda_type(f_info.type_name):
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"cannot assign to '{node.name}': it is a lambda",
                 )
             node.is_this_field = True
             node.field_info = f_info
             if self.current_member_fn is not None:
                 self.current_member_fn.is_mutating = True
             node.value.accept(self)
+            if self.is_lambda_type(node.value.type):
+                lam_name = self._lambda_display_name(node.value, node.value.type)
+                raise CompileError(
+                    node.value.line,
+                    node.value.col,
+                    f"'{lam_name}' is a lambda and cannot be assigned to '{node.name}': its type has no name",
+                )
             if f_info.type_name in self.structs:
                 if node.value.type != f_info.type_name:
                     raise CompileError(
@@ -1863,6 +2403,12 @@ class SemanticChecker:
                 )
             return
 
+        if self.current_lambda_name is not None and self.is_in_enclosing_env(node.name):
+            raise CompileError(
+                node.line,
+                node.col,
+                f"'{node.name}' is not captured by lambda '{self.current_lambda_name}': add it to the capture list, [{node.name}]",
+            )
         raise CompileError(
             node.line, node.col, f"variable '{node.name}' is used before its declaration"
         )
@@ -1873,6 +2419,12 @@ class SemanticChecker:
 
         if decl is not None:
             node.decl = decl
+            if self.is_lambda_type(decl.type_name):
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"cannot access capture '{node.fields[0]}' of lambda '{node.obj_name}'",
+                )
             if not decl.mutable:
                 raise CompileError(
                     node.line,
@@ -1882,7 +2434,19 @@ class SemanticChecker:
             curr_type = decl.type_name
         elif self.current_struct is not None and node.obj_name in self.current_struct.fields_by_name:
             f_info = self.current_struct.fields_by_name[node.obj_name]
+            if self.is_lambda_type(f_info.type_name):
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"cannot access capture '{node.fields[0]}' of lambda '{node.obj_name}'",
+                )
             if not f_info.mutable:
+                if self.current_struct.is_lambda:
+                    raise CompileError(
+                        node.line,
+                        node.col,
+                        f"cannot assign to '{chain_str}': the capture '{node.obj_name}' is const, write [mut {node.obj_name}]",
+                    )
                 raise CompileError(
                     node.line,
                     node.col,
@@ -1894,6 +2458,12 @@ class SemanticChecker:
                 self.current_member_fn.is_mutating = True
             curr_type = f_info.type_name
         else:
+            if self.current_lambda_name is not None and self.is_in_enclosing_env(node.obj_name):
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"'{node.obj_name}' is not captured by lambda '{self.current_lambda_name}': add it to the capture list, [{node.obj_name}]",
+                )
             raise CompileError(
                 node.line,
                 node.col,
@@ -1929,6 +2499,13 @@ class SemanticChecker:
         node.target_type = curr_type
 
         node.value.accept(self)
+        if self.is_lambda_type(node.value.type):
+            lam_name = self._lambda_display_name(node.value, node.value.type)
+            raise CompileError(
+                node.value.line,
+                node.value.col,
+                f"'{lam_name}' is a lambda and cannot be assigned to '{chain_str}': its type has no name",
+            )
         if curr_type in self.structs:
             if node.value.type != curr_type:
                 raise CompileError(
@@ -1948,7 +2525,63 @@ class SemanticChecker:
             )
 
     def visit_call(self, node: CallNode) -> str:
-        if self.current_struct is not None and node.func_name in self.current_struct.member_fns:
+        is_var = (
+            self.lookup(node.func_name) is not None
+            or (
+                self.current_struct is not None
+                and node.func_name in self.current_struct.fields_by_name
+            )
+        )
+        is_fn = (
+            (
+                self.current_struct is not None
+                and not self.current_struct.is_lambda
+                and node.func_name in self.current_struct.member_fns
+            )
+            or node.func_name in self.functions
+        )
+
+        if is_var and is_fn:
+            raise CompileError(
+                node.line,
+                node.col,
+                f"'{node.func_name}' is both a variable and a function: rename one of them",
+            )
+
+        if is_var:
+            target_var = VarNode(node.line, node.col, node.func_name)
+            var_type = target_var.accept(self)
+            if var_type not in self.structs:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"'{node.func_name}' is not callable: it is {var_type}",
+                )
+            s_info = self.structs[var_type]
+            if "call" not in s_info.member_fns:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"'{node.func_name}' is not callable: {var_type} has no member function 'call'",
+                )
+            rewritten = MemberCallNode(
+                node.line,
+                node.col,
+                target_var,
+                "call",
+                node.args,
+            )
+            rewritten.is_callable_call = True
+            rewritten.callable_name = node.func_name
+            node.rewritten_call = rewritten
+            node.type = self.visit_member_call(rewritten)
+            return node.type
+
+        if (
+            self.current_struct is not None
+            and not self.current_struct.is_lambda
+            and node.func_name in self.current_struct.member_fns
+        ):
             m_info = self.current_struct.member_fns[node.func_name]
             node.is_this_call = True
             node.struct_name = self.current_struct.name
@@ -1961,7 +2594,14 @@ class SemanticChecker:
                     f"wrong number of arguments for member function '{node.func_name}': expected {len(m_info.params)}, got {len(node.args)}",
                 )
             for arg, param in zip(node.args, m_info.params):
-                arg.accept(self)
+                arg_type = arg.accept(self)
+                if self.is_lambda_type(arg_type):
+                    lam_name = self._lambda_display_name(arg, arg_type)
+                    raise CompileError(
+                        arg.line,
+                        arg.col,
+                        f"'{lam_name}' is a lambda and cannot be passed to '{node.func_name}': its type has no name, so no parameter can have it",
+                    )
                 self.check_assignable(
                     arg,
                     param.type_name,
@@ -1972,6 +2612,18 @@ class SemanticChecker:
             return node.type
 
         if node.func_name not in self.functions:
+            if self.current_lambda_name == node.func_name:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"lambda '{node.func_name}' cannot call itself",
+                )
+            if self.current_lambda_name is not None and self.is_in_enclosing_env(node.func_name):
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"'{node.func_name}' is not captured by lambda '{self.current_lambda_name}': add it to the capture list, [{node.func_name}]",
+                )
             raise CompileError(
                 node.line, node.col, f"unknown function '{node.func_name}'"
             )
@@ -1983,7 +2635,14 @@ class SemanticChecker:
                 f"wrong number of arguments for '{node.func_name}': expected {len(fn_info.params)}, got {len(node.args)}",
             )
         for arg, param in zip(node.args, fn_info.params):
-            arg.accept(self)
+            arg_type = arg.accept(self)
+            if self.is_lambda_type(arg_type):
+                lam_name = self._lambda_display_name(arg, arg_type)
+                raise CompileError(
+                    arg.line,
+                    arg.col,
+                    f"'{lam_name}' is a lambda and cannot be passed to '{node.func_name}': its type has no name, so no parameter can have it",
+                )
             self.check_assignable(
                 arg,
                 param.type_name,
@@ -2003,6 +2662,61 @@ class SemanticChecker:
                 f"type '{target_type}' is not a struct, cannot call member function '{node.func_name}'",
             )
         s_info = self.structs[target_type]
+        if not node.is_callable_call and s_info.is_lambda:
+            if node.func_name in s_info.fields_by_name:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"cannot access capture '{node.func_name}' of lambda",
+                )
+        if not node.is_callable_call and node.func_name in s_info.fields_by_name:
+            field_name = node.func_name
+            if isinstance(node.target, VarNode):
+                field_target = FieldAccessNode(
+                    node.target.line,
+                    node.target.col,
+                    node.target.name,
+                    [field_name],
+                )
+            elif isinstance(node.target, FieldAccessNode):
+                field_target = FieldAccessNode(
+                    node.target.line,
+                    node.target.col,
+                    node.target.obj_name,
+                    [*node.target.fields, field_name],
+                    target=node.target.target,
+                    dot_loc=node.target.dot_loc,
+                )
+            else:
+                field_target = FieldAccessNode(
+                    node.line,
+                    node.col,
+                    "",
+                    [field_name],
+                    target=node.target,
+                    dot_loc=node.dot_loc,
+                )
+            field_type = field_target.accept(self)
+            if field_type not in self.structs:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"'{field_name}' is not callable: it is {field_type}",
+                )
+            field_struct_info = self.structs[field_type]
+            if "call" not in field_struct_info.member_fns:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"'{field_name}' is not callable: {field_type} has no member function 'call'",
+                )
+            node.target = field_target
+            node.func_name = "call"
+            node.is_callable_call = True
+            node.callable_name = field_name
+            target_type = field_type
+            s_info = field_struct_info
+
         if node.func_name not in s_info.member_fns:
             raise CompileError(
                 node.line,
@@ -2018,28 +2732,64 @@ class SemanticChecker:
             elif isinstance(node.target, FieldAccessNode) and node.target.is_this_field:
                 self.current_member_fn.called_member_fns.append((target_type, node.func_name))
 
+        callee_label = (
+            (node.callable_name or "call")
+            if node.is_callable_call
+            else node.func_name
+        )
         if len(node.args) != len(m_info.params):
+            if node.is_callable_call:
+                raise CompileError(
+                    node.line,
+                    node.col,
+                    f"wrong number of arguments for '{callee_label}': expected {len(m_info.params)}, got {len(node.args)}",
+                )
             raise CompileError(
                 node.line,
                 node.col,
                 f"wrong number of arguments for member function '{node.func_name}': expected {len(m_info.params)}, got {len(node.args)}",
             )
         for arg, param in zip(node.args, m_info.params):
-            arg.accept(self)
+            arg_type = arg.accept(self)
+            if self.is_lambda_type(arg_type):
+                lam_name = self._lambda_display_name(arg, arg_type)
+                raise CompileError(
+                    arg.line,
+                    arg.col,
+                    f"'{lam_name}' is a lambda and cannot be passed to '{callee_label}': its type has no name, so no parameter can have it",
+                )
+            what_msg = (
+                f"pass argument to '{callee_label}' parameter '{param.name}'"
+                if node.is_callable_call
+                else f"pass argument to parameter '{param.name}'"
+            )
             self.check_assignable(
                 arg,
                 param.type_name,
                 arg,
-                f"pass argument to parameter '{param.name}'",
+                what_msg,
             )
         node.type = m_info.return_type
         return node.type
 
     def visit_exit(self, node: ExitNode) -> None:
         val_type = node.value.accept(self)
+        if self.is_lambda_type(val_type):
+            lam_name = self._lambda_display_name(node.value, val_type)
+            raise CompileError(
+                node.value.line,
+                node.value.col,
+                f"'{lam_name}' is a lambda and cannot be returned from exit: its type has no name",
+            )
         if self.current_member_fn is not None:
             want = self.current_member_fn.return_type
             if not (val_type == want or (want == "i64" and val_type == "i32")):
+                if self.current_lambda_name is not None:
+                    raise CompileError(
+                        node.value.line,
+                        node.value.col,
+                        f"cannot return '{val_type}' from lambda '{self.current_lambda_name}' with return type '{want}'",
+                    )
                 raise CompileError(
                     node.value.line,
                     node.value.col,
@@ -2067,6 +2817,12 @@ class SemanticChecker:
             if target.is_this_field:
                 assert target.field_info is not None
                 if not target.field_info.mutable:
+                    if n.is_callable_call:
+                        raise CompileError(
+                            n.line,
+                            n.col,
+                            f"cannot call '{target.name}': its 'call' changes it, and it is not mut",
+                        )
                     raise CompileError(
                         n.line,
                         n.col,
@@ -2075,18 +2831,31 @@ class SemanticChecker:
             else:
                 assert target.decl is not None
                 if not target.decl.mutable:
+                    if n.is_callable_call:
+                        raise CompileError(
+                            n.line,
+                            n.col,
+                            f"cannot call '{target.name}': its 'call' changes it, and it is not mut",
+                        )
                     raise CompileError(
                         n.line,
                         n.col,
                         f"cannot call mutating member function '{n.func_name}' on const variable '{target.name}'",
                     )
         elif isinstance(target, FieldAccessNode):
+            callable_label = n.callable_name or target.fields[-1]
             if target.target is not None:
                 assert target.target.type is not None
                 curr_type = target.target.type
             elif target.is_this_field:
                 assert target.this_field_info is not None
                 if not target.this_field_info.mutable:
+                    if n.is_callable_call:
+                        raise CompileError(
+                            n.line,
+                            n.col,
+                            f"cannot call '{callable_label}': its 'call' changes it, and '{target.obj_name}' is not mut",
+                        )
                     raise CompileError(
                         n.line,
                         n.col,
@@ -2096,6 +2865,12 @@ class SemanticChecker:
             else:
                 assert target.decl is not None
                 if not target.decl.mutable:
+                    if n.is_callable_call:
+                        raise CompileError(
+                            n.line,
+                            n.col,
+                            f"cannot call '{callable_label}': its 'call' changes it, and '{target.obj_name}' is not mut",
+                        )
                     raise CompileError(
                         n.line,
                         n.col,
@@ -2106,6 +2881,12 @@ class SemanticChecker:
             for f_name in target.fields:
                 f_info = self.structs[curr_type].fields_by_name[f_name]
                 if not f_info.mutable:
+                    if n.is_callable_call:
+                        raise CompileError(
+                            n.line,
+                            n.col,
+                            f"cannot call '{callable_label}': its 'call' changes it, and it is not mut",
+                        )
                     raise CompileError(
                         n.line,
                         n.col,
@@ -2140,6 +2921,9 @@ class SemanticChecker:
                 for stmt in n.statements:
                     walk(stmt)
                 walk(n.exit)
+            elif isinstance(n, LambdaNode):
+                walk(n.body)
+                walk(n.decl_node)
             elif isinstance(n, DeclNode):
                 for init in n.inits:
                     walk(init)
@@ -2164,8 +2948,11 @@ class SemanticChecker:
             elif isinstance(n, NotNode):
                 walk(n.expr)
             elif isinstance(n, CallNode):
-                for a in n.args:
-                    walk(a)
+                if n.rewritten_call is not None:
+                    walk(n.rewritten_call)
+                else:
+                    for a in n.args:
+                        walk(a)
             elif isinstance(n, StructLiteralNode):
                 for e in n.inits:
                     walk(e)
@@ -2175,7 +2962,24 @@ class SemanticChecker:
 
         walk(node)
 
+    def _propagate_mutations(self, structs: list[StructDefNode]) -> None:
+        all_member_fns: list[MemberFnInfo] = []
+        for s in structs:
+            all_member_fns.extend(self.structs[s.name].member_fns.values())
+
+        changed = True
+        while changed:
+            changed = False
+            for m_info in all_member_fns:
+                if not m_info.is_mutating:
+                    for (callee_struct, callee_name) in m_info.called_member_fns:
+                        if self.structs[callee_struct].member_fns[callee_name].is_mutating:
+                            m_info.is_mutating = True
+                            changed = True
+                            break
+
     def visit_program(self, node: ProgramNode) -> None:
+        self.program_node = node
         for s in node.struct_defs:
             s.accept(self)
 
@@ -2224,21 +3028,7 @@ class SemanticChecker:
                 self.current_member_fn = None
             self.current_struct = None
 
-        # Fixed-point mutation propagation
-        all_member_fns: list[MemberFnInfo] = []
-        for s in node.struct_defs:
-            all_member_fns.extend(self.structs[s.name].member_fns.values())
-
-        changed = True
-        while changed:
-            changed = False
-            for m_info in all_member_fns:
-                if not m_info.is_mutating:
-                    for (callee_struct, callee_name) in m_info.called_member_fns:
-                        if self.structs[callee_struct].member_fns[callee_name].is_mutating:
-                            m_info.is_mutating = True
-                            changed = True
-                            break
+        self._propagate_mutations(node.struct_defs)
 
         # Check global functions
         for fn in node.fn_defs:
@@ -2259,6 +3049,8 @@ class SemanticChecker:
         for stmt in node.statements:
             stmt.accept(self)
         node.exit.accept(self)
+
+        self._propagate_mutations([*node.struct_defs, *node.lambda_struct_defs])
 
         # Check mutation rules across all AST call sites
         self.check_mutation_rules_program(node)
@@ -2727,6 +3519,9 @@ class CodeGenVisitor:
             self.emit_print_str_literal("\n")
 
     def visit_call(self, node: CallNode) -> ir.Value:
+        if node.rewritten_call is not None:
+            return self.visit_member_call(node.rewritten_call)
+
         if node.is_this_call:
             callee = self.fn_map[f"{node.struct_name}_{node.func_name}"]
             assert self.current_this is not None
@@ -2812,6 +3607,10 @@ class CodeGenVisitor:
             arg_vals.append(val)
         return self.builder.call(callee, arg_vals, name=f"call_{node.func_name}")
 
+    def visit_lambda(self, node: LambdaNode) -> None:
+        assert node.decl_node is not None
+        node.decl_node.accept(self)
+
     def visit_exit(self, node: ExitNode) -> None:
         exit_val = node.value.accept(self)
         if self.current_member_fn is not None:
@@ -2842,11 +3641,12 @@ class CodeGenVisitor:
         self.builder.ret(ir.Constant(self.i32_type, 0))
 
     def visit_program(self, node: ProgramNode) -> None:
-        for s in node.struct_defs:
+        all_structs = [*node.struct_defs, *node.lambda_struct_defs]
+        for s in all_structs:
             s.accept(self)
 
         # Declare member functions
-        for s in node.struct_defs:
+        for s in all_structs:
             for fn in s.member_fns:
                 fn_name = f"{s.name}_{fn.name}"
                 this_type = ir.PointerType(self.struct_types[s.name])
@@ -2868,7 +3668,7 @@ class CodeGenVisitor:
         saved_function = self.function
 
         # Generate member function bodies
-        for s in node.struct_defs:
+        for s in all_structs:
             for fn in s.member_fns:
                 llvm_fn = self.fn_map[f"{s.name}_{fn.name}"]
                 self.function = llvm_fn
@@ -2918,10 +3718,15 @@ def parse_ast(source_bytes: bytes) -> ProgramNode:
     return Parser(token_lines).parse_program()
 
 
-def compile_source(source_bytes: bytes) -> ir.Module:
+def check_ast(source_bytes: bytes) -> ProgramNode:
     ast = parse_ast(source_bytes)
     checker = SemanticChecker()
     checker.visit_program(ast)
+    return ast
+
+
+def compile_source(source_bytes: bytes) -> ir.Module:
+    ast = check_ast(source_bytes)
     context = ir.Context()
     module = ir.Module(name="practice6", context=context)
     module.triple = llvm.get_default_triple()
@@ -2959,10 +3764,25 @@ def main() -> None:
             print(f"Error: file '{sys.argv[2]}' not found", file=sys.stderr)
             sys.exit(1)
 
+    if len(sys.argv) == 3 and sys.argv[1] == "--ast-checked":
+        try:
+            with open(sys.argv[2], "rb") as f:
+                content = f.read()
+            ast = check_ast(content)
+            print(ast.dump())
+            sys.exit(0)
+        except CompileError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
+        except FileNotFoundError:
+            print(f"Error: file '{sys.argv[2]}' not found", file=sys.stderr)
+            sys.exit(1)
+
     if len(sys.argv) != 3:
         print(
             "Usage: python3 compiler.py <input.txt> <output.ll> \n"
             "OR python3 compiler.py --ast <input.txt> \n"
+            "OR python3 compiler.py --ast-checked <input.txt> \n"
             "OR python3 compiler.py --lex <input.txt> \n",
             file=sys.stderr,
         )

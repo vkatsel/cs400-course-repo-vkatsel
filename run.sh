@@ -23,8 +23,8 @@ if [ $# -eq 0 ] || [ "$1" = "test" ] || [ "$1" = "--tests" ] || [ "$1" = "-t" ];
     exec python3 "$DIR/tests/run_tests.py"
 fi
 
-# If --ast or --lex flag, run compiler directly and exit
-if [ "$1" = "--ast" ] || [ "$1" = "--lex" ]; then
+# If --ast, --ast-checked, or --lex flag, run compiler directly and exit
+if [ "$1" = "--ast" ] || [ "$1" = "--ast-checked" ] || [ "$1" = "--lex" ]; then
     exec python3 "$DIR/compiler.py" "$@"
 fi
 

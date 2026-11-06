@@ -1,0 +1,14 @@
+i32 offset{3}
+fn shift := [offset](i32 x) -> i32
+{
+    i32 r{x + offset}
+    exit r
+}
+i32 scale{4}
+fn shift_and_scale := [shift, scale](i32 x) -> i32
+{
+    i32 s{shift(x) * scale}
+    exit s
+}
+print(shift_and_scale(2))
+exit shift_and_scale(5)

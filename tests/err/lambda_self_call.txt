@@ -1,0 +1,6 @@
+fn rec := [](i32 n) -> i32
+{
+    i32 r{rec(n - 1)}
+    exit r
+}
+exit rec(3)

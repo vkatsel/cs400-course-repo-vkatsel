@@ -1,0 +1,10 @@
+struct S
+{
+    i32 x
+    fn bad := [x](i32 y) -> i32
+    {
+        i32 r{x + y}
+        exit r
+    }
+}
+exit 0
