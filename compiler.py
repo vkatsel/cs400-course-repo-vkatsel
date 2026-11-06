@@ -7,7 +7,7 @@ from lexer import CompileError, Token, lex, print_tokens
 from llvmlite import ir
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, weakref_slot=True)
 class Node:
     line: int
     col: int
@@ -3054,6 +3054,7 @@ class SemanticChecker:
 
         # Check mutation rules across all AST call sites
         self.check_mutation_rules_program(node)
+        self.scopes.clear()
 
 
 class CodeGenVisitor:
@@ -3714,94 +3715,66 @@ class CodeGenVisitor:
 
 
 def parse_ast(source_bytes: bytes) -> ProgramNode:
-    token_lines = lex(source_bytes)
-    return Parser(token_lines).parse_program()
+    return Parser(lex(source_bytes)).parse_program()
 
 
-def check_ast(source_bytes: bytes) -> ProgramNode:
+def check_ast(source_bytes: bytes, *, optimize: bool = False) -> ProgramNode:
     ast = parse_ast(source_bytes)
-    checker = SemanticChecker()
-    checker.visit_program(ast)
+    SemanticChecker().visit_program(ast)
+    if optimize:
+        sys.modules.setdefault("compiler", sys.modules[__name__])
+        from optimizer import remove_unused
+
+        remove_unused(ast)
     return ast
 
 
-def compile_source(source_bytes: bytes) -> ir.Module:
-    ast = check_ast(source_bytes)
-    context = ir.Context()
-    module = ir.Module(name="practice6", context=context)
+def compile_source(source_bytes: bytes, *, optimize: bool = False) -> ir.Module:
+    ast = check_ast(source_bytes, optimize=optimize)
+    module = ir.Module(name="practice6", context=ir.Context())
     module.triple = llvm.get_default_triple()
-
-    codegen = CodeGenVisitor(module)
-    codegen.visit_program(ast)
+    CodeGenVisitor(module).visit_program(ast)
     return module
 
 
 def main() -> None:
-    if len(sys.argv) == 3 and sys.argv[1] == "--lex":
-        try:
-            with open(sys.argv[2], "rb") as f:
-                tokens = lex(f.read())
-            print_tokens(tokens)
-            sys.exit(0)
-        except CompileError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-        except FileNotFoundError:
-            print(f"Error: file '{sys.argv[2]}' not found", file=sys.stderr)
-            sys.exit(1)
+    known_flags = {"--lex", "--ast", "--ast-checked", "--remove-unused"}
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    positional = [a for a in sys.argv[1:] if not a.startswith("--")]
+    optimize = "--remove-unused" in flags
+    mode_flags = flags - {"--remove-unused"}
+    expected_pos = 1 if mode_flags else 2
 
-    if len(sys.argv) == 3 and sys.argv[1] == "--ast":
-        try:
-            with open(sys.argv[2], "rb") as f:
-                content = f.read()
-            ast = parse_ast(content)
-            print(ast.dump())
-            sys.exit(0)
-        except CompileError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-        except FileNotFoundError:
-            print(f"Error: file '{sys.argv[2]}' not found", file=sys.stderr)
-            sys.exit(1)
-
-    if len(sys.argv) == 3 and sys.argv[1] == "--ast-checked":
-        try:
-            with open(sys.argv[2], "rb") as f:
-                content = f.read()
-            ast = check_ast(content)
-            print(ast.dump())
-            sys.exit(0)
-        except CompileError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-        except FileNotFoundError:
-            print(f"Error: file '{sys.argv[2]}' not found", file=sys.stderr)
-            sys.exit(1)
-
-    if len(sys.argv) != 3:
+    if not flags <= known_flags or len(mode_flags) > 1 or len(positional) != expected_pos:
         print(
-            "Usage: python3 compiler.py <input.txt> <output.ll> \n"
-            "OR python3 compiler.py --ast <input.txt> \n"
-            "OR python3 compiler.py --ast-checked <input.txt> \n"
-            "OR python3 compiler.py --lex <input.txt> \n",
+            "Usage: python3 compiler.py [--remove-unused] <input.txt> <output.ll>\n"
+            "OR python3 compiler.py [--remove-unused] --ast-checked <input.txt>\n"
+            "OR python3 compiler.py --ast <input.txt>\n"
+            "OR python3 compiler.py --lex <input.txt>",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    input_file = sys.argv[1]
-    output_file = sys.argv[2]
-
+    input_file = positional[0]
     try:
         with open(input_file, "rb") as f:
             content = f.read()
-        module = compile_source(content)
-        with open(output_file, "w", encoding="utf-8") as f:
-            f.write(str(module))
+        if "--lex" in mode_flags:
+            print_tokens(lex(content))
+        elif "--ast" in mode_flags:
+            print(parse_ast(content).dump())
+        elif "--ast-checked" in mode_flags:
+            print(check_ast(content, optimize=optimize).dump())
+        else:
+            module = compile_source(content, optimize=optimize)
+            with open(positional[1], "w", encoding="utf-8") as f:
+                f.write(str(module))
     except CompileError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
     except FileNotFoundError:
-        print(f"compilation error: file '{input_file}' not found", file=sys.stderr)
+        prefix = "Error" if mode_flags else "compilation error"
+        print(f"{prefix}: file '{input_file}' not found", file=sys.stderr)
         sys.exit(1)
 
 

@@ -1,463 +1,529 @@
-# AI Usage Log - CS400
+# AI Usage Disclosure — Practice 9 (`--remove-unused`)
 
-## Practice 8
+---
 
-<!-- session: 4bc60596-2b4f-484e-ad5e-e277c1264a05 -->
+## 1. Tools Used
+
+- **Tool Name**: Google Antigravity CLI (Agentic Coding Assistant)
+- **Model**: Gemini 4 Argon (Medium), Gemini 3.8 Flash (Medium)
+- **Usage Scope**: Implementing the `--remove-unused` AST optimization pass (`UseCounter`, `Pruner`, `remove_unused`), unused global function elimination, static effect analysis (`EffectAnalyzer`) for the additional task, updating `compiler.py` (`weakref_slot`, clearing semantic scopes) and `tests/run_tests.py`, creating test suites in `tests/opt/`, and writing the `## Optimizations` note in `README.md`.
+
+---
+
+## 2. What Was Taken, Changed, and Why
+
+- **What was taken as generated**:
+  - The implementation of `UseCounter`, `Pruner`, and the fixpoint loop in `remove_unused`, counting uses per declaration (`id(decl)`) instead of variable names, keeping expressions with `read()` or function calls, and supporting the `--remove-unused` CLI flag anywhere in the arguments.
+  - Tracking global function call counts (`fn_calls`) inside `UseCounter` and removing uncalled `FnDefNode` definitions from `ProgramNode.fn_defs` in the same fixpoint loop as unused variables.
+  - The `EffectAnalyzer` pass and `has_effect` helper for the additional task (detecting `print`, `read()`, `while`, struct field mutations, and recursion via a fixpoint loop so pure calls are removed).
+  - The updated `tests/run_tests.py` script that tests `tests/opt/` (comparing both `--ast-checked` output against `.astc` and program output against `.expected`), the 10 optimization test cases in `tests/opt/`, the `weakref_slot=True` addition on `Node`, and the `## Optimizations` section in `README.md`.
+- **What I changed / adapted and why**:
+  - Initially, the AI placed the whole optimization pass directly inside `compiler.py`. Since `compiler.py` was already getting too large, I asked to move all optimization logic into a separate `optimizer.py` file and import `remove_unused` from there.
+  - I reviewed the logic to make sure only top-level functions in `fn_defs` are removed and that removing a dead function also triggers removal of functions or variables that were only used inside it on the next iteration.
+  - Manually tested edge cases from the terminal (shadowed variables in nested blocks, `FieldAssignNode` on dead structs, chained unused functions, and self-referential loops like `k := k + 1`) to verify the pass before committing.
+
+---
+
+## 3. What I Understood (In My Own Words)
+
+Before this practice code optimization for me was kind of a black box, where the compiler magically removes unused things.
+During this practice I understood that on the fundametual level it's a simple algorithm that just looks if variable is red by something else or a function is called, as simple as that.
+And the important point is that it's done a couple of times until the counter of unused nodes is equal to 0, so as to remove all the unused thins, used by other unused things.
+
+
+---
+
+## 4. Full Prompts and Chat Transcripts
+
+## Practice 9 (`--remove-unused`)
+
+<!-- session: 7079fefa-5fdc-4dc9-b73a-7c27f96299dd -->
 User:
-/plan привіт, працюємо над @[.agents/w8-files/w08-practice.md] . дай будь ласка детальне оверв'ю того, що потрібно зробити, в чому суть практики та як це можна імплементувати. також, розпиши, як воно поєднається з тим що ми вже маємо і як воно працює на різних рівнях, як це має парситися, лексистися, рухатися далі
+/plan привіт, праюємо над практикою @[/home/ubuntu/cs400/.agents/w9-files/CS400_Practice_9.md] , в ній описаношо треба  зробити. ознайомся будь ласка. також пропоную почати з першої таски розібратися шотам  воно як працю
 
 Model:
-Ось детальний огляд [w08-practice.md](file:///home/ubuntu/cs400/.agents/w8-files/w08-practice.md): в чому суть практики, як воно працює на кожному рівні компілятора та як поєднується з поточною базою коду. Повний технічний план змін збережено в артефакті [implementation_plan.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/4bc60596-2b4f-484e-ad5e-e277c1264a05/implementation_plan.md).
+Ознайомився з умовою [CS400_Practice_9.md](file:///home/ubuntu/cs400/.agents/w9-files/CS400_Practice_9.md) та поточним станом [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py). Підготував детальний план у [implementation_plan.md](file:///home/ubuntu/.gemini/antigravity/brain/7079fefa-5fdc-4dc9-b73a-7c27f96299dd/implementation_plan.md).
 
----
+### Коротко про те, як працює Task 1 у нашому компіляторі:
+1. **Прив'язка до конкретної декларації (`decl`), а не до імені**:
+   Наш [`SemanticChecker`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L1703-L1715) вже зберігає посилання на конкретний вузол [`DeclNode`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L287-L293) у кожному місці використання або присвоєння:
+   - читання змінної ([`VarNode.decl`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L51-L55)) та ланцюжка полів ([`FieldAccessNode.decl`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L65-L74), наприклад `p.x`);
+   - виклик змінної-функтора або лямбди `c(5)` (переписаний у [`CallNode.rewritten_call`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2567-L2577), де `target` — це `VarNode` із `decl`);
+   - захоплення у лямбді `[k]` (у [`LambdaNode.decl_node.inits`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2295-L2312) вже лежать `VarNode` із `decl` на зовнішні змінні);
+   - присвоєння `y := ...` ([`AssignNode.decl`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L311-L316)) та `p.x := ...` ([`FieldAssignNode.decl`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L327-L335)).
+2. **Підрахунок читань (`UseCounter`)**:
+   - Ключем у словнику є `id(decl)`, тому затінені змінні з однаковим ім'ям (як зовнішній і внутрішній `x` у Warm-up 2) рахуються окремо.
+   - Присвоєння `y := 5` або `p.x := 5` **не** рахується як читання `y` чи `p`.
+   - Якщо ініціалізатор декларації або права частина присвоєння містить виклик функції чи `read()`, змінна помічається як прочитана (`self.read(n)` / `self.read(n.decl)`), щоб не загубити побічні ефекти.
+   - Параметри функцій, поля структур та самі оголошення лямбд не реєструються як кандидати на видалення.
+3. **Очищення та ітерації (`Pruner` + цикл до нерухомої точки)**:
+   - На кожній ітерації `Pruner` перебудовує списки інструкцій у всіх блоках без мертвих `DeclNode` та без `AssignNode` / `FieldAssignNode`, що пишуть у ці мертві декларації.
+   - Цикл повторюється, доки за прохід не залишиться жодної декларації з `0` читань (наприклад, у Warm-up 1 спочатку видаляється `y`, через що кількість читань `x` падає до `0`, і на другій ітерації видаляється `x`).
 
-### 1. В чому головна суть Практики 8?
-
-Ключова ідея цієї практики — **Desugaring (розцукрювання / переписування AST на етапі семантичного аналізу)**.
-Ми додаємо дві фічі високого рівня:
-1. **Callable Objects (Об'єкти-функтори, Task 1 — 1 бал)**: будь-яку змінну або поле структури, тип якої має метод `call`, можна викликати як функцію: `triple(14)` $\rightarrow$ `triple.call(14)`, а `s.scale(7)` $\rightarrow$ `s.scale.call(7)`.
-2. **Lambdas & Closures (Лямбда-функції із захопленням змінних, Task 2 — 1.5 бала + Additional Task `mut` captures — +1 бал)**: функції, які оголошуються прямо всередині коду як звичайний `statement` і захоплюють копії потрібних змінних у квадратних дужках `[k]` або `[mut n]`.
-
-**Чому це «синтаксичний цукор»?**
-Тому що в Практиці 7 ми **вже** реалізували структури, поля (`const` та `mut`), методи структур (`MemberFnNode` з неявним першим параметром `this`), виклики методів (`MemberCallNode`) та правило поширення мутацій (`is_mutating`).
-- **Callable object** — це просто перетворення виклику `obj(args)` на виклик методу `obj.call(args)`.
-- **Лямбда** `fn add_k := [k](i32 y) -> i32 { ... }` — це просто автоматично згенерована компілятором структура `lambda.add_k` з полем `k`, методом `call(i32 y) -> i32` та оголошенням локальної змінної `lambda.add_k add_k{k}` у місці, де стояла лямбда. Як тільки компілятор перетворив лямбду на структуру і змінну `add_k`, виклик `add_k(5)` автоматично стає викликом callable-об'єкта з Task 1!
-
----
-
-### 2. Як це рухається по конвеєру компілятора (рівень за рівнем)
-
-#### Рівень 1: Лексер ([lexer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py))
-- У поточному лексері є `(` та `)`, `{` та `}`, але ще немає квадратних дужок `[` та `]`.
-- У [`lex`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py#L104-L293) додаємо обробку байтів `91` (`[`) та `93` (`]`) як токенів `Token("operator", "[", line, col)` і `Token("operator", "]", line, col)`.
-- Усі ключові слова (`fn`, `mut`, `exit` тощо) вже лекситься як треба.
-
-#### Рівень 2: Парсер ([`Parser`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L429-L1395)) і первинне дерево `--ast`
-На етапі парсингу парсер **не знає типів і не знає, чи ім'я є змінною, чи функцією**:
-1. **Виклики (`triple(14)` та `s.scale(7)`)**:
-   - `triple(14)` парситься у [`parse_factor`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L488-L613) абсолютно так само, як і виклик звичайної функції — у [`CallNode`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L104-L119).
-   - `s.scale(7)` вже зараз парситься у [`MemberCallNode`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L122-L139) (`target=VarNode("s")`, `func_name="scale"`).
-   - Тому вивід `--ast` для викликів залишається незмінним.
-2. **Лямбди (`fn name := [captures](params) -> ret_type`)**:
-   - Парсер розрізняє звичайну функцію та лямбду за токеном після `:=`:
-     - `fn name := (` — звичайна функція або метод структури (дозволені тільки у секції `fn_defs` на початку програми або всередині `struct`). Якщо така конструкція трапляється серед `statement` або всередині блоку — це помилка парсингу.
-     - `fn name := [` — це `LambdaNode` (дозволена всюди, де дозволений `statement`: на top-level серед statements, у тілі функцій, методів, `if`, `while` та всередині іншої лямбди). Якщо `[` стоїть у методі структури — це помилка.
-   - У списку захоплень `[...]` парсер зчитує елементи вигляду `ident` або `mut ident` у список `CaptureDef`.
-
-#### Рівень 3: Семантичний аналіз і Переписування ([`SemanticChecker`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L1439-L2265)) та `--ast-checked`
-Саме тут відбувається вся магія Практики 8:
-
-1. **Переписування викликів (Task 1)**:
-   - У [`visit_call`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L1950-L1995) для `name(args)` перевіряємо:
-     - Чи є `name` видимою змінною (локальна змінна/параметр у `self.scopes` або поле поточної структури/лямбди у `self.current_struct`)?
-     - Чи є `name` функцією (метод поточної структури або глобальна функція у `self.functions`)?
-     - **Конфлікт**: якщо `name` одночасно і видима змінна, і функція — видаємо помилку на місці виклику: `'twice' is both a variable and a function: rename one of them`.
-     - **Якщо це змінна**: перевіряємо, що її тип — структура, яка має метод `call`. Якщо це `i32`/`i64`/`bool` або структура без `call` — видаємо відповідну помилку (`'n' is not callable: it is i32` або `'p' is not callable: Point has no member function 'call'`). Якщо метод `call` є — перетворюємо виклик на виклик методу `call` для об'єкта `name` (у `--ast-checked` він виводиться як `CallableCall <name>`).
-   - У [`visit_member_call`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L1996-L2037) для `obj.name(args)`:
-     - Якщо `name` — це **поле** структури `obj` (наприклад, `s.scale(7)`), то переписуємо `target` на доступ до поля `FieldAccessNode(obj, "scale")`, а ім'я методу ставимо `"call"`, і перевіряємо його за тими ж правилами callable-об'єкта.
-
-2. **Перевірка і переписування лямбд (Task 2 + Additional Task)**:
-   Коли `SemanticChecker` обходить `LambdaNode` (наприклад, `fn add_k := [k](i32 y) -> i32`):
-   - **Крок 1 (Перевірка захоплень у зовнішній області видимості)**:
-     - Кожне захоплення `c` має бути видимою змінною у точці оголошення лямбди (інакше `cannot capture 'k': no variable 'k' is visible here`).
-     - Перевіряємо відсутність дублікатів у `[...]` (`'k' is captured twice`) та те, що жоден параметр не має такого ж імені, як захоплення.
-   - **Крок 2 (Створення структури `lambda.<name>` та методу `call`)**:
-     - Створюємо синтетичну структуру `lambda.add_k` (оскільки в ідентифікаторах мови не може бути крапки, користувач ніколи не зможе послатися на цей тип напряму або створити колізію).
-     - Для кожного захоплення `c` додаємо поле у `lambda.add_k` з типом захопленої змінної та прапорцем `mutable = c.mutable` (`const` для `[k]`, `mut` для `[mut k]`).
-     - Додаємо в структуру метод `call` з параметрами, типом повернення та тілом лямбди.
-   - **Крок 3 (Перевірка тіла `call` в ізольованій області видимості)**:
-     - Тіло лямбди перевіряється точно як метод структури `lambda.add_k`: воно бачить лише свої параметри, свої локальні змінні, поля своєї структури `lambda.add_k` (тобто захоплення!) та глобальні функції.
-     - Якщо в тілі використовується змінна із зовнішньої області видимості, якої немає у списку `[...]`, видаємо помилку: `'k' is not captured by lambda 'add_k': add it to the capture list, [k]`.
-     - Якщо в тілі робиться присвоєння `k := ...` у `const`-захоплення, видаємо: `cannot assign to 'k': the capture 'k' is const, write [mut k]`.
-     - Якщо в тілі змінюється `mut`-захоплення або викликається мутуючий `call` на `mut`-захопленні (наприклад, `[mut next]`), то метод `call` цієї лямбди автоматично стає `is_mutating = True`!
-   - **Крок 4 (Створення оголошення змінної-замикання `DeclNode`)**:
-     - Після перевірки тіла (тому лямбда не бачить саму себе і не може викликати себе рекурсивно) створюємо `DeclNode` для змінної `add_k` типу `lambda.add_k`, ініціалізованої списком `[VarNode(c.name) for c in captures]`.
-     - Якщо хоча б одне захоплення має `mut`, сама змінна `add_k` оголошується як `mut`, щоб виклик `next()` на місці оголошення був дозволений правилом мутацій.
-   - **Крок 5 (Заборона використання лямбди як звичайного значення)**:
-     - Оскільки тип `lambda.<name>` не має імені в мові, будь-яка спроба передати лямбду як аргумент функції (`sq(times)`), повернути з `exit`, присвоїти, використати в ініціалізації іншої змінної, надрукувати у `print(add_k)` або звернутися до її поля через крапку ззовні (`add_k.k`) блокується у `SemanticChecker` з відповідним повідомленням про помилку.
-
-#### Рівень 4: Кодогенерація LLVM IR ([`CodeGenVisitor`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2267-L2915))
-Найприємніше те, що завдяки такому переписуванню [`CodeGenVisitor`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2267-L2915) майже не потребує змін:
-- Додані у `program.struct_defs` структури `lambda.<name>` автоматично генерують LLVM-тип `%"lambda.add_k" = type {i32}` та функцію `define i32 @"lambda.add_k_call"(%"lambda.add_k"* %"this", i32 %"y")`.
-- Коли `CodeGenVisitor` доходить до `LambdaNode` у блоці, він просто викликає `visit_decl` для згенерованого `DeclNode`: робить `alloca %"lambda.add_k"` і копіює поточні значення захоплених змінних у поля структури через `gep` + `store` (тому зміна змінної пізніше не впливає на створену лямбду, а в циклі `while` на кожній ітерації в поля записуються актуальні значення).
-- Виклик `add_k(5)` або `triple(14)` генерується існуючим [`visit_member_call`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2750-L2813) як:
-  ```llvm
-  %"call_call" = call i32 @"lambda.add_k_call"(%"lambda.add_k"* %"add_k", i32 5)
-  ```
-
----
-
-Перегляньте, будь ласка, план у [implementation_plan.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/4bc60596-2b4f-484e-ad5e-e277c1264a05/implementation_plan.md). Якщо все зрозуміло та підходить — підтвердьте план, і я перейду до реалізації всіх частин (включно з додатковим завданням на `+1` бал) та написання тестів!
+Переглянь, будь ласка, план — якщо все ок, можемо одразу реалізувати **Task 1** і перевірити його на обох програмах з Warm-up! Також скажи, чи плануємо робити **Additional Task (+1 бал)** після основних тасок.
 
 ---
 
 User:
-/plan а можеш будь ласка цей план розписати українською та більш стюдент френдлі мовою, щоб я все зрозумів
+а уточни будь ласка шо таке  Pruner і навіщо він потрібен. Бо яшось заплутався. от ніби змінна не має читань, то ми її видаляємо апрунер нашо і шо це таке.
 
 Model:
-Я переписав план у [implementation_plan.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/4bc60596-2b4f-484e-ad5e-e277c1264a05/implementation_plan.md) українською мовою у простому, покроковому форматі з наочним прикладом того, як компілятор «під капотом» перетворює лямбду та виклики об'єктів на звичайні структури й методи з Практики 7.
+Слово **Pruner** походить від англійського *to prune* — «обрізати сухі гілки дерева» (як садівник обрізає сухі гілки в саду).
 
-Подивіться, будь ласка, оновлений план. Якщо виникнуть питання щодо будь-якого кроку — з радістю поясню детальніше, або якщо все зрозуміло — можемо переходити до реалізації!
+Дивись, чому процес розділений на два кроки в одній ітерації — **`UseCounter` (рахувальник)** і **`Pruner` (обрізувач)**:
 
----
-
-User:
-[implementation_plan.md]
-L167: а якшо під лямбдою теж є глобальні функції, таке ж може бути?
-L199: а нам до речі не варто би були обробити ті випадки якшо .call змінює якусь немутабельну змінну? чи ми тільки з копіями працюємо? і те саме щодо лямбд
-
-Model:
-Дуже влучні питання! Розберімо обидва детально:
-
----
-
-### 1. Щодо L167: «А якщо під лямбдою теж є глобальні функції, таке ж може бути?»
-
-За граматикою нашої мови (ще з Практики 5–7) програма має суворий порядок секцій:
-```ebnf
-program ::= { struct_def } { fn_def } { statement } exit ;
+### 1. Чому не можна видалити змінну одразу, коли ми її бачимо?
+Коли ми йдемо по дереву згори донизу і бачимо оголошення:
+```text
+i32 mut y{10}
 ```
-Тобто:
-1. Спочатку йдуть **тільки структури** (`struct_def`).
-2. Потім — **тільки глобальні функції** (`fn_def`, без `[...]`).
-3. Потім — **інструкції (`statement`)** (змінні, `if`, `while`, `print`, а тепер ще й **`lambda`**) і в кінці `exit`.
+У цей момент ми **ще не знаємо**, чи буде хтось читати `y` нижче в коді (наприклад, через 20 рядків в `exit y`), чи ні.
+Тому спочатку **`UseCounter`** мусить пройти **все дерево до кінця** і просто порахувати у словник, скільки разів кожну змінну реально прочитали.
 
-Оскільки **лямбда за правилами є саме інструкцією (`statement`)** (бо зазвичай перед нею вже оголошені змінні, які вона захоплює, наприклад `i32 mut k{10}`), то поява першої ж лямбди означає, що ми вже перебуваємо в секції `{ statement }`.
+Коли `UseCounter` закінчив обхід усього дерева, ми дивимось у його таблицю і відбираємо ті змінні, у яких `0` читань:
+```python
+dead = {d for d, k in counter.reads.items() if k == 0}
+```
 
-- Якщо під лямбдою йде **інша лямбда** (`fn other := [...]`) — це ще один `statement`, і це **дозволено**.
-- А якщо під лямбдою (або під будь-яким іншим `statement`, типу `i32 k{10}`) хтось напише **глобальну функцію** без квадратних дужок (`fn global_fn := (...)`) — це порушення структури програми, і парсер у [`parse_statement`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L1337-L1338) видасть помилку `function declaration after statement` (на це навіть є старий тест у `tests/err/`).
+### 2. І от тепер приходить `Pruner` — це і є саме видалення!
+Ми вже знаємо список «мертвих» змінних (`dead`), але вони все ще лежать всередині нашого дерева (у списках `block.statements` всередині `ProgramNode`, різних `if`, `while`, функцій).
 
----
+**`Pruner`** — це просто функція/клас, який проходить по всіх блоках дерева і **чистить їхні списки `statements`**, викидаючи звідти дві речі:
+1. **Саме оголошення мертвої змінної** (`DeclNode`), наприклад `i32 mut y{10}`.
+2. **Усі присвоєння в цю мертву змінну** (`AssignNode` / `FieldAssignNode`), наприклад `y := 5` або `p.x := 5`.
 
-### 2. Щодо L199: «Чи треба обробляти випадки, якщо `.call` змінює немутабельну змінну? Чи ми тільки з копіями працюємо? І те саме щодо лямбд»
+### Навіщо `Pruner` викидає ще й присвоєння?
+Уяви таку програму:
+```text
+i32 mut y{10}
+y := 20
+exit 0
+```
+Змінну `y` ніхто ніде не читає (`0` читань).
+Якби ми видалили тільки рядок `i32 mut y{10}`, але забули видалити `y := 20`, у програмі залишилося б присвоєння у неіснуючу змінну, і генератор LLVM IR впав би з помилкою.
+Тому `Pruner` іде по кожному блоку і робить приблизно таке:
+```python
+block.statements = [
+    stmt for stmt in block.statements
+    if not is_dead_decl_or_assign(stmt, dead)
+]
+```
+Тобто **`Pruner` — це буквально і є операція «видалити мертві змінні та присвоєння в них зі списків інструкцій дерева»**.
 
-**Так, обов'язково треба обробляти!** Тут працюють **два рівні захисту мутабельності**, і обидва ми перевіряємо:
+А після того, як `Pruner` підчистив дерево, цикл `while True` запускає `UseCounter` ще раз по вже підчищеному дереву — бо всередині видаленого `i32 y{x}` могло сидіти єдине читання змінної `x`, і тепер `x` теж став не потрібен.
 
-#### Ситуація А: Зміна всередині самого `.call` (або тіла лямбди)
-1. **Звичайні зовнішні змінні**:
-   До зовнішніх змінних напряму ні метод `.call`, ні лямбда доступу не мають. Лямбда завжди бере **копію** змінної у своє поле під час оголошення (`[k]` або `[mut n]`), тому оригінальна зовнішня змінна ніколи не змінюється.
-2. **Поля самої структури або захоплення лямбди**:
-   - Якщо у звичайній структурі поле оголошене без `mut` (`i32 k`), або у лямбді змінна захоплена без `mut` (`[k]`), то це поле є **`const`**.
-   - Якщо всередині `.call` або тіла лямбди спробувати написати `k := k + 1`, компілятор видасть помилку:
-     - для звичайної структури: `cannot assign to const field 'k' inside member function`
-     - для лямбди: `cannot assign to 'k': the capture 'k' is const, write [mut k]`
-
-#### Ситуація Б: Метод `.call` змінює `mut`-поле, але сам об'єкт (або захоплена лямбда) є `const`!
-Уявімо, що всередині структури чи лямбди поле **дозволено** змінювати (`i32 mut n` у `Counter`, або `[mut n]` у лямбді `next`). Тоді сам метод `call` стає **мутуючим (`is_mutating = True`)** — бо кожен виклик змінює стан самого об'єкта.
-
-А тепер подивімось, як викликають цей об'єкт:
-1. **Для об'єкта структури (Task 1)**:
-   ```txt
-   Counter c{0}      // <-- змінна 'c' створена БЕЗ 'mut' (вона const!)
-   i32 a{c()}        // <-- ПОМИЛКА!
-   ```
-   Хоча поле `n` всередині `Counter` має `mut`, сам об'єкт `c` є `const`. Виклик `c()` намагається змінити `c.n`, тому ми **блокуємо** такий виклик з помилкою:
-   `cannot call 'c': its 'call' changes it, and it is not mut`
-   (Так само, якщо викликати `s.c()`, де або `s` не є `mut`, або поле `c` всередині `s` не є `mut`).
-
-2. **Для лямбд (Additional Task)**:
-   - Коли оголошується `fn next := [mut n]() -> i32`, компілятор знає, що в неї є `mut`-захоплення, і автоматично робить саму змінну `next` мутабельною (`lambda.next mut next{n}`). Тому просто викликати `next()` одразу після оголошення — можна.
-   - **АЛЕ** якщо інша лямбда `twice` захоплює `next` **без `mut`**:
-     ```txt
-     fn twice := [next]() -> i32   // <-- захопили копію 'next' як const!
-     {
-         i32 a{next()}             // <-- ПОМИЛКА!
-         exit a
-     }
-     ```
-     Оскільки `twice` захопила `next` без `mut`, її власна копія об'єкта `next` є **`const`-полем** структури `lambda.twice`. А метод `call` у `next` є мутуючим (`is_mutating = True`)! Тому виклик `next()` всередині `twice` намагається змінити `const`-поле, і компілятор видасть помилку:
-     `cannot call 'next': its 'call' changes it, and it is not mut` (щоб запрацювало, треба написати `[mut next]`).
-
----
-
-Чи тепер все склалося в цілісну картину? Якщо план підходить — дайте знати, і починаємо імплементацію!
+Чи стало зрозуміліше, як працюють у парі `UseCounter` і `Pruner`? Якщо так — можемо переходити до реалізації або розібрати ще якийсь момент!
 
 ---
 
 User:
-гуд можна в цілому почати з таски 1, і одразу ж написати на нього тести, тобто робити таск 3 послідовно
+окей, гуд. останнє уточнення, як саме наше дерево залишається валідним якшо ми буквально видаляємо ноди? чи чекай, створення і присвоєння значень ніби на хвостах відбуваютсья? чи н
 
 Model:
-**Task 1 (Callable Objects)** та першу частину **Task 3 (тести для Task 1)** повністю реалізовано та перевірено (`112 passed, 0 failed`):
+Ти дуже влучно намацав суть! Дивись, чому дерево гарантовано залишається валідним з двох причин:
+
+### 1. Де саме в дереві живуть `DeclNode` та `AssignNode`?
+У нашій мові оголошення змінної (`i32 x{10}`) і присвоєння (`x := 20`) — це **інструкції (`StmtNode`)**, а не вирази (`ExprNode`). Тобто вони не можуть стояти всередині арифметики типу `1 + (x := 5)`.
+
+А кожен блок у дереві (`ProgramNode` або `BlockNode`) влаштований дуже просто:
+```text
+BlockNode
+ ├── statements: [ Stmt_1, Stmt_2, Stmt_3, ... ]   <-- звичайний список Python!
+ └── exit: ExitNode (окреме поле, яке ніколи не видаляється)
+```
+Кожен `DeclNode` чи `AssignNode` — це просто окремий елемент у списку `statements`, від якого вниз росте лише його власне піддерево (вираз ініціалізатора `{10}` або права частина присвоєння `:= 20`). Від самого `DeclNode` ніякі інші інструкції блоку «вниз як діти» не ростуть.
+
+Тому коли ми викидаємо `DeclNode` чи `AssignNode` зі списку `statements`, ми просто виймаємо один елемент зі списку інструкцій блоку (умовно було `[Stmt_1, Stmt_2, Stmt_3]`, стало `[Stmt_1, Stmt_3]`). Обов'язковий `exit` у функції або програмі лежить в окремому полі `.exit`, тому він завжди залишається на місці.
+
+### 2. Чому ніхто в дереві не «зламається» через те, що `DeclNode` зник?
+Тому що ми видаляємо `DeclNode` **тільки тоді, коли його `reads == 0`**!
+- Це означає, що в усьому іншому дереві **немає жодного `VarNode`**, який би посилався на цей `DeclNode`.
+- Єдині вузли, які ще могли посилатися на цей `DeclNode` — це присвоєння в нього (`AssignNode` / `FieldAssignNode`), але ми видаляємо їх **разом із ним** у той самий момент.
+
+### Єдиний особливий випадок: порожній блок після видалення
+Наприклад:
+```text
+if true
+{
+    i32 unused{10}
+}
+exit 0
+```
+У синтаксисі початкового коду порожні фігурні дужки `{}` заборонені парсером. Але коли вже після парсера й чекера ми видалимо `i32 unused{10}`, у `then_block` список `statements` стане порожнім `[]`.
+І для дерева, і для генератора LLVM IR це абсолютно валідно: `visit_block` просто зробить 0 кроків циклу `for stmt in node.statements`, а `visit_if` згенерує перехід `br label %merge`.
+
+Тож дерево після кожного кроку `Pruner` залишається на 100% цілим і зв'язним. Починаємо писати код для **Task 1**?
+
+---
+
+User:
+океей, гуд. тоді перший таск можна імплементовувати. і давай одразу ж покривати таски відповідними тестами, аби не накопчиувать тєхборг))
+
+Model:
+**Task 1** імплементовано та протестовано!
 
 ### Що зроблено:
-1. **Вузли AST та `--ast-checked`** у [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py) та [run.sh](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/run.sh):
-   - Додано підтримку перезапису викликів у [`CallNode`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L104-L124) та [`MemberCallNode`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L127-L150) з виводом `CallableCall` у `--ast-checked` (тоді як `--ast` зберігає сире дерево розбору).
-2. **Семантичні перевірки та перезапис** ([`visit_call`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L1964-L2062), [`visit_member_call`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2064-L2164), [`_check_target_mut`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2192-L2282)):
-   - Розпізнавання виклику локальних змінних, параметрів і полів поточної структури як виклику `.call(...)`.
-   - Підтримка виклику callable-полів після крапки (`s.scale(7)` $\rightarrow$ `s.scale.call(7)`).
-   - Перевірка всіх помилок із умови: конфлікт змінної та функції з однаковим ім'ям при виклику, виклик `i32`/`i64`/`bool`, виклик структури без методу `call`, неправильна кількість/типи аргументів (з назвою об'єкта, а не `call`), виклик мутуючого `call` на `const`-об'єкті або через `const`-поле.
-3. **Тести для Task 1**:
-   - У `tests/ok/`: [callable_task1_example.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/callable_task1_example.txt), [callable_field_chain.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/callable_field_chain.txt).
-   - У `tests/err/`: [callable_struct_no_call.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_struct_no_call.txt), [callable_on_i32.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_on_i32.txt), [callable_var_and_fn_conflict.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_var_and_fn_conflict.txt), [callable_wrong_args.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_wrong_args.txt), [callable_mutate_const.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_mutate_const.txt), [callable_mutate_const_field.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_mutate_const_field.txt).
+1. У [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py):
+   - Додано [`has_call_or_read`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3716-L3729), [`UseCounter`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3732-L3846), [`Pruner`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3849-L3886) та цикл нерухомої точки [`remove_unused`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3889-L3896).
+   - У [`main()`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3931-L4019) та [run.sh](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/run.sh) додано підтримку прапорця `--remove-unused` на будь-якій позиції командного рядка.
+2. У [tests/run_tests.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py) та `tests/opt/`:
+   - Додано підтримку тестів оптимізації (`tests/opt/*.txt`, звірка `.astc` і перевірка однаковості виводу з прапорцем і без) та запуск усіх попередніх тестів `tests/ok` і `tests/err` через `./run.sh test --remove-unused` (або `REMOVE_UNUSED=1`).
+   - Створено 5 тестів для Task 1 у `tests/opt/`:
+     - [warmup1.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/opt/warmup1.txt)
+     - [warmup2.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/opt/warmup2.txt)
+     - [if_block_decl.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/opt/if_block_decl.txt)
+     - [call_kept.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/opt/call_kept.txt)
+     - [nothing_removed.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/opt/nothing_removed.txt)
+   - Усі **143 тести** проходять зеленим як без прапорця, так і з `--remove-unused`.
 
-Переходимо до **Task 2 (Lambdas)** та **Additional Task (`[mut x]` captures)** разом із їхніми тестами?
-
----
-
-User:
-гуд, а крайні випадки переввірено?
-
-Model:
-Усі крайні випадки для **Task 1** перевірено та покрито тестами (`115 passed, 0 failed`):
-- [callable_param_and_shadow.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/callable_param_and_shadow.txt) — передача callable-структури як параметра функції та одночасне існування змінної й функції з однаковим ім'ям без виклику;
-- [callable_wrong_arg_type.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_wrong_arg_type.txt) — неправильний тип аргументу при виклику об'єкта (повідомлення вказує на об'єкт `'triple'`, а не `'call'`);
-- [callable_field_no_call.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_field_no_call.txt) — виклик поля структури після крапки (`h.p(5)`), тип якого не має методу `call`.
-
-Переходимо до **Task 2 (Lambdas)** та **Additional Task (`mut` captures)**?
+Переходимо до **Task 2 (Unused Functions)**?
 
 ---
 
 User:
-чомусь не все занеслось в ai_usage.txt до речі
+окі. слухай перечитав компайлер, чи не забагато там всякої єрунди ти надодавав? конєшно провтикане рішення розділити його на окремі модулі призвело до появи цього франкенштейна-антипатерна, але ж ну саме зараз якось ніби забагто всього, нє?
 
 Model:
-Виправив скрипт [.agents/log_ai_usage.py](file:///home/ubuntu/cs400/.agents/log_ai_usage.py) та синхронізував обидва файли ([ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt) і [.agents/w8-files/ai_usage.txt](file:///home/ubuntu/cs400/.agents/w8-files/ai_usage.txt)):
+Скоротив новий код майже вдвічі (прибрав майже 100 рядків бойлерплейту):
+- У [`UseCounter`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3732-L3831) об'єднав порожні методи (`visit_const = visit_bool = visit_read = visit_string_literal = _noop`), а також однакові обходи (`visit_field_assign = visit_assign`, `visit_member_fn = visit_fn_def`).
+- У [`Pruner`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3834-L3860) прибрав проміжні обгортки й залишив один компактний `match` у `prune_stmts`.
+- У [`main()`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3889-L3928) прибрав 4 дублікати блоків `try/except` — тепер читання файлу та обробка помилок відбуваються в одному місці.
 
-- **У чому була причина**: коли під час одного ходу викликалися інструменти (або фонові процеси), хук `PostInvocation` спрацьовував уже на першому проміжному повідомленні (перед викликом інструмента) і зберігав індекс `USER_INPUT` у `.log_state.json`. Через перевірку `if state.get(session_id) == step_idx: return` фінальна відповідь в кінці ходу ігнорувалася.
-- **Що виправлено**: тепер `log_ai_usage.py` на кожному виклику збирає всі ходи сесії з транскрипту, бере фінальну відповідь моделі для кожного ходу (без проміжних `tool_calls`) і оновлює секцію сесії в `ai_usage.txt`. Тепер усі попередні й майбутні ходи записуються повністю.
-
-Можемо переходити до **Task 2 (Lambdas)** та **Additional Task (`mut` captures)**?
+До речі, якщо хочеш не змішувати оптимізатор з рештою `compiler.py`, можемо взагалі винести `UseCounter`, `Pruner` та `remove_unused` в окремий файл `optimizer.py` (як у нас `lexer.py` лежить окремо). Як тобі зручніше — залишити тут чи винести в `optimizer.py`, і чи рухаємося далі до **Task 2 (Unused Functions)**?
 
 ---
 
 User:
-тоді в цілому можеш комітити те, що є, одразу переходити до таски 2, і одразу ж покривай цю частину тестами (таск 3). потім про додатковий поговоримо
+окей, закоміть пж
 
 Model:
-Запустив повний набір тестів (`./run.sh test`) і перевірку `--ast-checked` для Task 2 — зачекаємо кілька секунд на завершення.
+Закомічено (`0ec1d64`: `feat: implement Practice 9 Task 1 (unused variable removal) and tests`).
+
+Переходимо до **Task 2 (Unused Functions)**?
 
 ---
 
 User:
-окей, у мене одразу питання до додаткового таску. шо в цьому контексті означає сaptures, і як очікується шо це працюватиме
+так,  давай до таску два. тут я так розумію те саме, але дивимося на виклики функцій, якшо немає => видаляємо повністю ноду функцій і всіх її дєтєй? ну і також в декілька проходів робимо бо шо якшо функцю викликає інша, яку теж ніхто не викликає
 
 Model:
-### Що таке captures (захоплення) простими словами?
+**Task 2** готовий і займає всього кілька рядків!
 
-Коли ми створюємо лямбду, вона є **локальною функцією**, але функція не має автоматичного доступу до змінних ззовні. 
-Щоб лямбда могла використати зовнішню змінну (наприклад, `k`), ми записуємо її в квадратні дужки: `[k]`.
+### Що додано:
+1. У [`UseCounter`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3732-L3835):
+   - додано словник `self.fn_calls: dict[str, int] = {}`;
+   - у `visit_fn_def` кожна глобальна функція реєструється з `0` викликів (`self.fn_calls.setdefault(n.name, 0)`);
+   - у `visit_call` для викликів глобальних функцій інкрементується лічильник `self.fn_calls[n.func_name]`.
+2. У [`Pruner`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3838-L3869) та [`remove_unused`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3872-L3880):
+   - відфільтровуються функції з `0` викликів (`tree.fn_defs = [fn for fn in tree.fn_defs if fn.name not in self.dead_fns]`) у тому самому ітеративному циклі.
+3. Додано 6-й тест у `tests/opt/`: [fn_chain.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/opt/fn_chain.txt) (`twice` <- `helper` <- `unused`).
+   - Програма виводить `Program exit with result 4`, а в згенерованому `.ll` залишаються лише дві функції: `main` та `user_twice`.
+   - Усі **144 тести** зелені з прапорцем і без нього.
 
-Це називається **захопленням за значенням (capture by copy)**:
-1. У момент оголошення лямбди створюється **копія** значення змінної `k`.
-2. Компілятор під капотом перетворює лямбду на звичайну структуру:
-   ```
-   struct lambda.add_k {
-       k: i32
-   }
-   ```
-3. Тобто кожне захоплення — це **поле структури**, в яке при ініціалізації скопіювали значення зовнішньої змінної.
+Далі у нас залишилися:
+- **Task 3 (замітка в `README.md`)**: короткий розділ **Optimizations** про звільнення пам'яті видалених вузлів у Python (reference counting, відсутність зворотних посилань `parent`, замір через `weakref.ref(node)`) та обмеження для самопідживлюваних змінних (`k := k + 1`).
+- **Additional Task (+1 бал)**: видалення викликів функцій без побічних ефектів (`calls without effects`).
 
----
-
-### Чим відрізняється звичайне захоплення (Task 2) від `mut` захоплення (Додатковий таск)?
-
-#### 1. У Task 2 (константне захоплення): `[k]`
-* Поле структури створюється як **`const`**:
-  ```
-  struct lambda.add_k {
-      k: i32 const
-  }
-  ```
-* Всередині тіла лямбди змінна `k` є константою. Спроба написати `k := k + 1` викликає помилку:
-  `cannot assign to 'k': the capture 'k' is const, write [mut k]`
-* Сама змінна-лямбда (`add_k`) теж створюється як `const`.
-
----
-
-#### 2. У Додатковому таску: `[mut k]`
-* Поле структури стає **мутабельним (`mut`)**:
-  ```
-  struct lambda.next {
-      n: i32 mut
-  }
-  ```
-* **Що це означає для поведінки програми:**
-  1. **Власна незалежна копія:**
-     Лямбда копіює значення зовнішньої змінної `n` у своє поле. Оригінальна зовнішня `n` **ніколи не змінюється**, навіть якщо зовнішня `n` була константною! Лямбда змінює лише *свою власну внутрішню копію*.
-  2. **Лямбда як лічильник/стан (stateful closure):**
-     Якщо лямбда змінює `mut` захоплення (наприклад, `n := n + 1`), вона зберігає цей новий стан між викликами:
-     ```
-     i32 n{0}
-     fn next := [mut n]() -> i32 {
-         n := n + 1
-         exit n
-     }
-     print(next())  // виведе 1
-     print(next())  // виведе 2
-     print(n)       // виведе 0! (оригінальна n не змінилася)
-     ```
-  3. **Правило мутабельності виклику:**
-     Оскільки `call` усередині змінює своє поле `n`, функція `call` стає **мутуючою (mutating member function)**.
-     - Тому сама змінна лямбди повинна бути оголошена як `mut` (якщо хоча б одне захоплення є `mut`, змінна лямбди автоматично стає `mut`):
-       ```
-       Decl next lambda.next mut
-       ```
-     - Якщо ми передаємо цю лямбду іншій лямбді або структурі як константу (`[next]`), то викликати `next()` всередині буде заборонено перевіркою мутабельності:
-       `cannot call 'next': its 'call' changes it, and it is not mut`
-     - Щоб дозволити виклик, друга лямда має захопити її теж як `[mut next]`:
-       тоді вона зробить копію стану лічильника і буде змінювати вже свою копію.
-
----
-
-### Підсумок
-Захоплення (`captures`) — це спосіб «взяти із собою» копії зовнішніх змінних всередину лямбди (як поля структури).
-- `[x]` — тільки для читання (const-поле).
-- `[mut x]` — дає лямбді свій власний змінюваний стан (mut-поле), зберігаючи інкапсуляцію та не чіпаючи оригінальну змінну.
+Робимо спочатку замітку в `README.md` (щоб повністю закрити базові 3 бали), чи також ідемо на **Additional Task (+1)**?
 
 ---
 
 User:
-окей, а як імплементувати це захоплення?
+так і пропоную все ж оптимізатор винести в окремий файл, як лексер. старе трогати не будемо шоб не наламати дров, от оптимізатор го винесемо
 
 Model:
-Імплементувати `[mut x]` насправді дуже просто і природно, тому що майже весь фундамент ми вже заклали в архітектуру під час Task 1 і Task 2!
+Виніс оптимізатор в окремий модуль [optimizer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/optimizer.py):
+- Переніс класи `UseCounter`, `Pruner` та функцію `remove_unused` з [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py) до [optimizer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/optimizer.py).
+- У [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py) залишив імпорт `from optimizer import remove_unused`.
+- Усі 144 тести проходять успішно як у звичайному режимі, так і з прапорцем `--remove-unused`.
 
-Ось як це працює по кроках:
+Готовий продовжувати — скажи, чи переходимо до **Task 3** (замітка в `README.md`) та/або **Additional Task (+1 бал)**.
 
 ---
 
-### 1. Парсер (`parse_lambda`)
-Зараз у capture list ми парсимо просто ідентифікатор:
-```python
-# Було:
-captures.append(CaptureDef(cap_tok.text, False, cap_tok.line, cap_tok.col))
-```
-Тепер перед назвою змінної може стояти слово `mut`:
-```python
-# Стане:
-is_mut = False
-if self.peek() is not None and self.peek().text == "mut":
-    self.eat()
-    is_mut = True
-...
-captures.append(CaptureDef(cap_tok.text, is_mut, cap_tok.line, cap_tok.col))
-```
-Також у граматиці `grammar.ebnf`:
-```ebnf
-capture ::= [ "mut" ] ident ;
+User:
+окі гуд, закоміть будь ласка
+
+Model:
+Закомічено (`87ccde8`: `feat: implement Practice 9 Task 2 (unused global functions) and extract optimizer.py`).
+
+Переходимо до **Task 3** (замітка **Optimizations** у `README.md`) та/або **Additional Task (+1 бал)**?
+
+---
+
+User:
+так давай, про шо там таск 3?
+
+Model:
+**Task 3 (0.5 бала) — Тести та замітка в `README.md`**:
+
+### 1. Тести (`tests/opt/` та сумісність)
+- Потрібно створити щонайменше 6 тестів у папці `tests/opt/`:
+  - `warmup1.txt` — перша програма з Warm-up (каскадне видалення `y`, потім `x`).
+  - `warmup2.txt` — друга програма з Warm-up (затінення `x`: зовнішній видаляється, внутрішній залишається).
+  - `if_block_decl.txt` — оголошення всередині `if`, яке видаляється (блок стає порожнім).
+  - `call_kept.txt` — змінна, що не читається, але викликає функцію з побічним ефектом (залишається).
+  - `nothing_removed.txt` — програма, де всі змінні використовуються (нічого не видаляється).
+  - `fn_chain.txt` — ланцюжок невикористаних функцій (Task 2).
+  Для кожного тесту мають бути файли `.astc` (вивід `--remove-unused --ast-checked`) та `.expected` (вивід програми, який має бути однаковим як з оптимізацією, так і без).
+- Тест-ранер [tests/run_tests.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py) повинен підтримувати запуск усіх попередніх тестів (`tests/ok/`, `tests/err/`) з прапорцем `--remove-unused`, і всі вони мають бути зеленими.
+
+### 2. Замітка в `README.md` про звільнення пам'яті ("Who frees a removed subtree")
+Потрібно додати розділ **Optimizations** у [README.md](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/README.md), де відповісти на питання:
+- **Мова та модель пам'яті**: Компілятор написано на Python 3.12 (CPython), де основним механізмом є підрахунок посилань (reference counting), а для циклів посилань використовується cyclic garbage collector (`gc`).
+- **Відсутність покажчиків на батька (`parent`)**: Наші вузли AST зберігають посилання лише вниз (до дітей) та на `DeclNode`, але не мають зворотних посилань на `parent`. Тому видалене піддерево не утворює циклів, і при видаленні зі списку `statements` лічильник посилань падає до 0 негайно.
+- **Експериментальний замір (`weakref.ref`)**: Додати до базового класу `Node` підтримку слабких посилань (`weakref_slot=True` у dataclass) та навести короткий код, який демонструє, що після `remove_unused` слабке посилання `ref()` одразу стає `None` навіть при вимкненому `gc` (`gc.disable()`).
+- **Обмеження підрахунку**: Зазначити, що змінна, яка живить сама себе (`k := k + 1`), або функції, які рекурсивно викликають одна одну по колу, не видаляються, бо їхній лічильник не досягає нуля.
+
+Чекаю на твоє «ок», щоб додати `weakref_slot=True` до `Node`, провести замір через `weakref.ref` і записати розділ **Optimizations** у `README.md`.
+
+---
+
+User:
+ок, газ
+
+Model:
+**Task 3** виконано:
+
+1. **Підтримка слабких посилань у AST**:
+   - У [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py) для базового класу `Node` додано `@dataclass(slots=True, weakref_slot=True)`, що дозволяє створювати `weakref.ref` для вузлів дерева.
+2. **Замітка в [README.md](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/README.md)**:
+   - Додано розділ **Optimizations**, де описано механізм звільнення піддерев (CPython reference counting), відсутність покажчиків на батька (`parent`), через що вузли не мають циклічних залежностей і звільняються миттєво, а також обмеження для самопідживлюваних змінних (`k := k + 1`) та взаємних викликів.
+   - Наведено емпіричний вимір через `weakref.ref` та `gc.disable()`, що підтверджує негайне звільнення пам'яті вузла при видаленні з AST.
+3. **Тести**:
+   - Усі 6 тестів у `tests/opt/` готові та перевірені.
+   - Усі 144 тести проходять як з прапорцем `--remove-unused`, так і без нього.
+
+Готовий закомітити Task 3 або перейти до **Additional Task (+1 бал)** — як скажеш!
+
+---
+
+User:
+а накидай но мені різних команд для тестування, в тому числі з крайніми випадками
+
+Model:
+Ось корисні команди для тестування компілятора та перевірки крайових випадків:
+
+### 1. Запуск тестового набору
+```bash
+# Запуск усіх тестів без оптимізації
+python3 tests/run_tests.py
+
+# Запуск усіх тестів з оптимізацією --remove-unused (має бути green на всіх 144 тестах)
+python3 tests/run_tests.py --remove-unused
 ```
 
----
+### 2. Перевірка окремих оптимізаційних тестів (Task 1 та Task 2)
+```bash
+# Warm-up 1: каскадне видалення y -> x
+python3 compiler.py --remove-unused --ast-checked tests/opt/warmup1.txt
 
-### 2. Створення структури лямбди (`visit_lambda`)
-Коли ми синтезуємо поля для структури `lambda.<name>`:
-- Якщо `cap.mutable == True`, поле структури створюється як `mut`:
-  ```python
-  FieldDef(cap.name, cap_type, mutable=cap.mutable, cap.line, cap.col)
-  ```
-- Оскільки це звичайне `mut` поле структури, присвоєння `n := n + 1` усередині тіла лямбди тепер автоматично дозволено!
-- Присвоєння до цього поля автоматично позначає метод `call` як **мутуючий (`is_mutating = True`)** — це ми вже маємо в `visit_assign`:
-  ```python
-  if self.current_member_fn is not None:
-      self.current_member_fn.is_mutating = True
-  ```
+# Warm-up 2: затінення змінних (зовнішній x видаляється, внутрішній залишається)
+python3 compiler.py --remove-unused --ast-checked tests/opt/warmup2.txt
 
----
+# Видалення змінної усередині if-блоку (блок стає порожнім)
+python3 compiler.py --remove-unused --ast-checked tests/opt/if_block_decl.txt
 
-### 3. Оголошення змінної-закриття (`DeclNode`)
-За правилом практики:
-> *The closure variable is `mut` when one of its captures is `mut`, so a call like `next()` works at the place of the declaration.*
+# Змінна не читається, але містить виклик із print (має залишитися)
+python3 compiler.py --remove-unused --ast-checked tests/opt/call_kept.txt
 
-Ми вже написали це в Task 2:
-```python
-is_decl_mut = any(cap.mutable for cap in node.captures)
-decl_node = DeclNode(..., mutable=is_decl_mut, ...)
+# Task 2: трирівневий ланцюжок функцій (twice <- helper <- unused)
+python3 compiler.py --remove-unused --ast-checked tests/opt/fn_chain.txt
 ```
-Тобто `next` автоматично стає мутабельною змінною `Decl next lambda.next mut`.
 
----
+### 3. Перевірка згенерованого LLVM IR
+```bash
+# Переконатися, що у згенерованому .ll для fn_chain.txt визначено тільки twice та main:
+python3 compiler.py --remove-unused tests/opt/fn_chain.txt /tmp/fn_chain.ll
+grep "define " /tmp/fn_chain.ll
+# Очікується: тільки @"twice" та @main
+```
 
-### 4. Перевірка мутабельності при виклику (Mutation Check)
-Оскільки `call` є мутуючим методом:
-- На місці оголошення `next` є `mut`, тому виклик `next()` дозволений.
-- Якщо інша лямбда захоплює її без `mut`: `[next]`, то `next` стає `const` полем нової лямбди. Тоді наш перевірник `_check_target_mut` видасть рівно ту помилку, яку вимагає практика:
-  ```
-  cannot call 'next': its 'call' changes it, and it is not mut
-  ```
-- А якщо вона захоплює її як `[mut next]`, то поле мутабельне — і виклик дозволений!
+### 4. Крайові випадки для ручної перевірки
+- **Самопідживлення (`k := k + 1`)**: змінна `k` ніде більше не використовується, але через читання у правій частині не видаляється.
+- **Декілька однакових імен у різних блоках**: правильне розрізнення за `id(decl)`, а не за іменем рядка.
+- **Порожні блоки після видалення**: перевірка, що парсер не ламається, а LLVM IR генерує коректний `br label`.
+- **Взаємна рекурсія невикористаних функцій**: дві функції, які викликають лише одна одну, не видаляються базовим алгоритмом (лічильник > 0).
 
----
-
-### 5. Генерація коду (LLVM IR)
-Тут **взагалі нічого нового писати не потрібно**:
-- При створенні `next` на стеку виділяється структура `%"lambda.next"`.
-- При виклику `next()` першим аргументом (`this`) передається вказівник на цей стек-слот `%"lambda.next"*`.
-- Метод `call` завантажує поле, додає 1 і записує назад у той самий стек-слот через GEP + `store`.
-- А коли інша лямбда робить `[mut next]`, вона копіює поточний стан структури у своє власне поле!
-
----
-
-Бажаєте, щоб ми зараз підключили підтримку `[mut x]` у парсері та граматиці та додали відповідні тести з завдання?
+Якщо захочеш закомітити Task 3 або перейти до **Additional Task (+1 бал)** — дай знати!
 
 ---
 
 User:
-тоді давай це також зробимо, тільки закоміть таск 2. також покрий тестами, в @[cs400-course-repo-vkatsel/examples] створи програму, яка буде покривавти все шо сьогодні було зроблено. також додай туди якийсь трікі код, щоб було видно як він працю
+олрайт, коміть. в чому додатковий таск полягає?
 
 Model:
-Оновлюю журнал використання ШІ (`ai_usage.txt`)...
+Закомічено! (`ae69f69`: `docs: add Optimizations note to README and support weakref slot`).
 
 ---
 
-User:
-а для чого ти самостійно запустив скрипт, воно ж самелогується, і що там по тому саску?
+### У чому полягає Additional Task (+1 бал) — "Calls without effects"
 
-Model:
-Ви абсолютно праві — хук `PostInvocation` логує все автоматично після кожної репліки, тому запускати вручну не було потреби (я скасував той фоновий процес).
+У **Task 1** ми використовували дуже консервативне правило:
+> *Якщо ініціалізатор змінної чи вираз у `:=` містить будь-який виклик функції (`CallNode` / `MemberCallNode`), ми вважаємо це побічним ефектом і завжди зберігаємо змінну та виклик.*
 
----
+Але насправді більшість викликів (наприклад, чисті математичні функції типу `square(3)`) **нічого не друкують, нічого не читають і не змінюють пам'ять**. Якщо результат такого виклику ніхто не читає (`i32 a{square(3)}`), його можна безпечно видалити!
 
-### Що зроблено по тасці:
+#### Суть додаткового таску:
+Замість `has_call_or_read`, ми видаляємо невикористану змінну навіть тоді, коли її вираз містить виклик функції, **якщо ця функція не має спостережуваних побічних ефектів**.
 
-1. **Task 2 закомічено** в гілку `practice-8`:
-   - Хеш коміту: `94c74f1` (*"feat: implement Practice 8 Task 2 (lambdas and closures) with full test coverage"*).
+Змінна чи присвоєння залишаються тільки тоді, коли вираз містить `read()` або виклик функції, яка має **effect**:
 
-2. **Додатковий таск (`[mut x]` captures) повністю реалізовано**:
-   - [grammar.ebnf](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/grammar.ebnf): оновлено правило `capture ::= [ "mut" ] ident ;`.
-   - [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py):
-     - `parse_lambda` тепер розпізнає `mut` перед назвою захоплення.
-     - Для таких захоплень генеруються `mut` поля у структурі `lambda.<name>`.
-     - Присвоєння до них у тілі лямбди автоматично робить метод `call` мутуючим.
-     - Сама змінна лямбди стає `mut`, якщо хоча б одне захоплення є `mut`.
-     - Перевірка мутабельності викликів (`_check_target_mut` та фіксована точка) контролює, де таку лямбду дозволено викликати.
+1. **Прямі ефекти**:
+   - Функція у своєму тілі містить `print` або `read()`.
+   - Це мутуюча member-функція структури (вона змінює стан об'єкта, на якому викликана: наприклад, `c.bump()`).
+   - Функція може не повернутися (зависнути/зациклитися): її тіло містить `while`, або вона рекурсивно викликає себе напряму чи через цикл. Зациклення є спостережуваним ззовні, тому такі виклики не можна викидати.
+2. **Транзитивні ефекти**:
+   - Функція викликає іншу функцію, яка має ефект (наприклад, `relay` викликає `loud`, яка робить `print`).
+   - Оскільки функції можуть викликати одна одну, множина функцій з ефектами обчислюється як **fixpoint**: починаємо з перших трьох правил і додаємо тих, хто їх викликає, поки множина не перестане змінюватися.
+   - Для callable-об'єктів (лямбд чи структур із `call`) — це перевірка їхнього методу `call`.
 
-3. **Покриття тестами (138/138 тестів пройдено успішно)**:
-   - [lambda_mut_counter_example.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/lambda_mut_counter_example.txt) — еталонна програма з лічильником `next()` та `twice()`, виводить `1`, `2`, `34`, `3`, `Program exit with result 0`.
-   - [lambda_mut_in_loop.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/lambda_mut_in_loop.txt) — зміна `mut` захоплення всередині циклу.
-   - [lambda_two_copies.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/lambda_two_copies.txt) — дві окремі лямбди зі своїми незалежними копіями однієї змінної.
-   - [lambda_const_and_mut.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/lambda_const_and_mut.txt) — поєднання `const` і `mut` захоплень в одному списку `[factor, mut count]`.
-   - [lambda_mut_call_const_capture.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/lambda_mut_call_const_capture.txt) — спроба виклику мутуючої лямбди через константне захоплення `[next]`, що дає очікувану помилку:
-     `compilation error: line 9:11: cannot call 'next': its 'call' changes it, and it is not mut`.
-
-4. **Створено демонстраційну програму [examples/practice8_demo.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples/practice8_demo.txt)**:
-   Вона демонструє всі нові можливості разом:
-   - **Callable-об'єкти:** структура `Multiplier` з методом `call`, виклики як `mul3(10)` і `mul3.call(10)`, а також callable-поле в іншій структурі `pipe.op(5)`.
-   - **Ізоляція копій у константних лямбдах:** зміна зовнішньої змінної `threshold` після оголошення лямбди не змінює її захоплене значення.
-   - **Трікі-код зі станом (stateful closures):**
-     - Лямбда `counter` має власний змінюваний стан `[mut seed]`.
-     - Її захоплює інша лямбда: `branch_a := [mut counter]`.
-     - `branch_a` робить **окрему копію стану лічильника** і рахує далі на ній (`3`, `4` $\to$ `34`).
-     - Оригінальний `counter` продовжує рахувати зі свого стану (`2` $\to$ `3`).
-     - Зовнішня змінна `seed` залишається недоторканою (`0`).
-
-Виконання демо-програми через `./run.sh examples/practice8_demo.txt` повертає очікувані значення:
+#### Приклад з методички:
 ```text
-30
-30
-15
-21
-18
-true
-false
-1
-2
-34
-3
-0
-Program exit with result 4
+fn square := (i32 a) -> i32 {
+    i32 r{a * a}
+    exit r
+}
+fn quiet := (i32 a) -> i32 {
+    exit square(a)
+}
+fn loud := (i32 a) -> i32 {
+    print(a)
+    exit a
+}
+
+i32 a{square(3)}   # Чиста: немає print/read/while/mutation -> видаляється
+i32 b{quiet(4)}    # Викликає чисту -> чиста -> видаляється
+i32 c{loud(5)}     # Робить print -> МАЄ ЕФЕКТ -> ЗАЛИШАЄТЬСЯ
+exit 0
+```
+- **Без додаткового таску** (Task 1): `a` і `b` залишаються, бо містять виклики.
+- **З додатковим таском**:
+  1. Ітерація 1: `a` і `b` видаляються.
+  2. Ітерація 2: функція `quiet` більше ніким не викликається -> видаляється.
+  3. Ітерація 3: функція `square` більше ніким не викликається -> видаляється.
+  4. Залишається тільки `loud`, оголошення `c` та `exit 0`. Програма виводить `5` і виходить з `0`.
+
+Також перевіряються:
+- `c.bump()` (мутуючий метод) — зберігається.
+- `c.peek()` (лише читає поле) — видаляється, якщо результат не використовується.
+- функції з `while` або рекурсією — зберігаються.
+
+Робимо додатковий таск?
+
+---
+
+User:
+о ну звучить супер, а як це реалізувати?
+
+Model:
+Реалізація насправді дуже логічна й компактна, бо наш `compiler.py` уже має частину цієї інформації (наприклад, прапорець `is_mutating` для member-функцій).
+
+Ось як це влаштовано крок за кроком:
+
+---
+
+### Крок 1. Визначення «ефектів» функцій (Effect Analysis)
+
+Кожна функція у програмі ідентифікується парою або рядком:
+- Глобальна функція: `"fn:name"`
+- Member-функція структури / лямбди: `("struct_name", "method_name")`
+
+Ми проходимо по тілу кожної функції й збираємо:
+1. **Чи має вона безпосередній ефект:**
+   - Чи є всередині тіла `PrintNode`?
+   - Чи є всередині тіла `ReadNode`?
+   - Чи є `WhileNode`?
+   - Для member-функцій: чи є вона мутуючою (`is_mutating == True`)?
+2. **Які інші функції вона викликає:**
+   - Список прямих викликів глобальних функцій та member-функцій.
+
+---
+
+### Крок 2. Обчислення циклів (рекурсії) та замикання (Fixpoint)
+
+1. **Рекурсія / потенційне зациклення:**
+   - Будуємо граф викликів між функціями `caller -> callee`.
+   - Якщо з функції `f` можна по графу дійти назад до самої `f` (пряма чи взаємна рекурсія), вона позначається як така, що має ефект (бо рекурсія може не завершитися).
+2. **Поширення ефектів (Fixpoint):**
+   - Робимо простий цикл `while changed`:
+   - Якщо функція `A` викликає функцію `B`, і `B` позначена як така, що має ефект, то й `A` стає функцією з ефектом (`effects.add(A)`).
+   - Повторюємо, поки множина не перестане рости.
+
+---
+
+### Крок 3. Перевірка виразів: `has_effect(expr)` замість `has_call_or_read(expr)`
+
+Зараз у нас було:
+```python
+def has_call_or_read(expr):
+    match expr:
+        case ReadNode() | CallNode() | MemberCallNode():
+            return True
+        ...
 ```
 
-Всі зміни Додаткового таску зараз знаходяться в робочому дереві. Якщо все виглядає добре, скажіть — і я зроблю фінальний коміт для додаткового таску.
+А тепер буде:
+```python
+def has_effect(expr, effect_fns):
+    match expr:
+        case ReadNode():
+            return True
+        case CallNode(func_name=fn):
+            # Якщо це глобальна функція з ефектом
+            return fn in effect_fns
+        case MemberCallNode(struct_name=st, func_name=m):
+            # Якщо це метод або call лямбди з ефектом
+            return (st, m) in effect_fns
+        case BinOpNode(left=l, right=r):
+            return has_effect(l, effect_fns) or has_effect(r, effect_fns)
+        ...
+```
+
+---
+
+### Крок 4. Інтеграція в цикл оптимізації `remove_unused`
+
+На кожній ітерації нашого циклу:
+1. Аналізуємо ефекти актуальних функцій у дереві -> отримуємо множину `effect_fns`.
+2. Запускаємо `UseCounter(effect_fns)`.
+   - Декларації `DeclNode` та присвоєння `AssignNode` залишаються (`self.read(decl)`), тільки якщо `has_effect(value, effect_fns) == True`!
+   - Якщо у виразі стоїть чистий виклик (наприклад, `square(3)`), `has_effect` повертає `False`, тому змінна **не** вважається прочитаною і може бути видалена!
+3. `Pruner` викидає мертві змінні та функції з `0` викликів.
+4. Оскільки видалення `i32 a{square(3)}` прибирає виклик `square(3)`, на наступній ітерації `square` матиме 0 викликів і видалиться сама функція.
+
+Все працює в єдиному ітеративному циклі.
+
+Якщо підхід зрозумілий і погоджуєш — можу реалізувати цей аналіз у [optimizer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/optimizer.py) та додати тестові файли згідно з умовами методички!
+
+---
+
+User:
+океей, давай спробуємо, ніби все зрозуміло. також питання наперед, які вимоги да аі юзеджу тут в практиці?
+
+Model:
+Щодо **`ai_usage.txt`** — у методичці є пряма вимога (рядок 7):
+> *"`ai_usage.txt` is updated for this practice (tools, prompts, what you took as-is, what you changed, or “not used”); a missing or stub file is 0 for the practice."*
+
+Також згідно з правилами проекту:
+- Файл ведеться у корені репозиторію: `cs400-course-repo-vkatsel/ai_usage.txt`.
+- Він дзеркалиться для Moodle-здачі у `/home/ubuntu/cs400/.agents/w9-files/ai_usage.txt`.
+- Структура містить: інструменти (IDE / Agent: Antigravity / Gemini), запити користувача, що взято як є, що змінено та архітектурні рішення.
+
+### Реалізація Additional Task (Calls Without Effects):
+1. **`EffectAnalyzer`**:
+   - Обходить AST і шукає функції/методи з прямими спостережуваними ефектами (`print`, `read()`, `while`, мутація полів через `AssignNode(is_this_field=True)`).
+   - Будує граф викликів `caller -> callees`, виявляє пряму та взаємну рекурсію (функції, які можуть не завершитися).
+   - Запускає фікспоінт-поширення: якщо функція `A` викликає функцію `B` з ефектом, `A` також помічається як така, що має ефект.
+2. **`has_effect(expr, effect_keys)`**:
+   - Перевіряє, чи містить вираз `read()` або виклик функції/методу/лямбди з ефектом.
+   - Чисті функції (без ефектів) не вважаються ефектом, тому змінні, які лише приймають їхній результат і більше ніде не читаються, видаляються.
+3. **Нові тести для Additional Task**:
+   - `tests/opt/additional_chain.txt` — чисті функції `square` та `quiet` видаляються, а функція `loud` (з `print`) та змінна `c` залишаються.
+   - `tests/opt/additional_counter.txt` — мутуючий `c.bump()` залишається, а чистий `c.peek()` видаляється.
+   - `tests/opt/additional_loop_rec.txt` — функції з `while` та рекурсією залишаються, а чиста функція видаляється.
+   - `tests/opt/additional_lambda.txt` — лямбда з `print` залишається, а чиста видаляється.
+
+Усі 148 тестів успішно проходять як без оптимізації, так і з прапорцем `--remove-unused`.
 
 ---
