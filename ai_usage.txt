@@ -1,529 +1,572 @@
-# AI Usage Disclosure — Practice 9 (`--remove-unused`)
+# AI Usage Disclosure — Practice 10 (`points` binary, I/O sessions, and FFI)
 
 ---
 
 ## 1. Tools Used
 
 - **Tool Name**: Google Antigravity CLI (Agentic Coding Assistant)
-- **Model**: Gemini 4 Argon (Medium), Gemini 3.8 Flash (Medium)
-- **Usage Scope**: Implementing the `--remove-unused` AST optimization pass (`UseCounter`, `Pruner`, `remove_unused`), unused global function elimination, static effect analysis (`EffectAnalyzer`) for the additional task, updating `compiler.py` (`weakref_slot`, clearing semantic scopes) and `tests/run_tests.py`, creating test suites in `tests/opt/`, and writing the `## Optimizations` note in `README.md`.
+- **Model**: Gemini 3.8 Flash (Medium)
+- **Usage Scope**: [TODO: Scope of usage for Practice 10, e.g., Task 1 points binary and I/O runner, Additional Task extern fn, tests]
 
 ---
 
 ## 2. What Was Taken, Changed, and Why
 
 - **What was taken as generated**:
-  - The implementation of `UseCounter`, `Pruner`, and the fixpoint loop in `remove_unused`, counting uses per declaration (`id(decl)`) instead of variable names, keeping expressions with `read()` or function calls, and supporting the `--remove-unused` CLI flag anywhere in the arguments.
-  - Tracking global function call counts (`fn_calls`) inside `UseCounter` and removing uncalled `FnDefNode` definitions from `ProgramNode.fn_defs` in the same fixpoint loop as unused variables.
-  - The `EffectAnalyzer` pass and `has_effect` helper for the additional task (detecting `print`, `read()`, `while`, struct field mutations, and recursion via a fixpoint loop so pure calls are removed).
-  - The updated `tests/run_tests.py` script that tests `tests/opt/` (comparing both `--ast-checked` output against `.astc` and program output against `.expected`), the 10 optimization test cases in `tests/opt/`, the `weakref_slot=True` addition on `Node`, and the `## Optimizations` section in `README.md`.
+  - [TODO: List files, functions, tests or boilerplate taken directly from AI output]
 - **What I changed / adapted and why**:
-  - Initially, the AI placed the whole optimization pass directly inside `compiler.py`. Since `compiler.py` was already getting too large, I asked to move all optimization logic into a separate `optimizer.py` file and import `remove_unused` from there.
-  - I reviewed the logic to make sure only top-level functions in `fn_defs` are removed and that removing a dead function also triggers removal of functions or variables that were only used inside it on the next iteration.
-  - Manually tested edge cases from the terminal (shadowed variables in nested blocks, `FieldAssignNode` on dead structs, chained unused functions, and self-referential loops like `k := k + 1`) to verify the pass before committing.
+  - [TODO: List modifications, bug fixes, custom refactoring, manual checks]
 
 ---
 
 ## 3. What I Understood (In My Own Words)
 
-Before this practice code optimization for me was kind of a black box, where the compiler magically removes unused things.
-During this practice I understood that on the fundametual level it's a simple algorithm that just looks if variable is red by something else or a function is called, as simple as that.
-And the important point is that it's done a couple of times until the counter of unused nodes is equal to 0, so as to remove all the unused thins, used by other unused things.
-
+[TODO: Briefly describe in your own words what you learned/understood during Practice 10 regarding native compilation, object files/linking, I/O sessions, or C FFI]
 
 ---
 
 ## 4. Full Prompts and Chat Transcripts
 
-## Practice 9 (`--remove-unused`)
+## Practice 10
 
-<!-- session: 7079fefa-5fdc-4dc9-b73a-7c27f96299dd -->
+<!-- session: b48caf7e-25d4-45ab-be8a-90c202e75430 -->
 User:
-/plan привіт, праюємо над практикою @[/home/ubuntu/cs400/.agents/w9-files/CS400_Practice_9.md] , в ній описаношо треба  зробити. ознайомся будь ласка. також пропоную почати з першої таски розібратися шотам  воно як працю
+прів, працює над @[.agents/w10-files/CS400_Practice_10.md] , дай будь ласка оверв'ю що потрібно зробити
 
 Model:
-Ознайомився з умовою [CS400_Practice_9.md](file:///home/ubuntu/cs400/.agents/w9-files/CS400_Practice_9.md) та поточним станом [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py). Підготував детальний план у [implementation_plan.md](file:///home/ubuntu/.gemini/antigravity/brain/7079fefa-5fdc-4dc9-b73a-7c27f96299dd/implementation_plan.md).
-
-### Коротко про те, як працює Task 1 у нашому компіляторі:
-1. **Прив'язка до конкретної декларації (`decl`), а не до імені**:
-   Наш [`SemanticChecker`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L1703-L1715) вже зберігає посилання на конкретний вузол [`DeclNode`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L287-L293) у кожному місці використання або присвоєння:
-   - читання змінної ([`VarNode.decl`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L51-L55)) та ланцюжка полів ([`FieldAccessNode.decl`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L65-L74), наприклад `p.x`);
-   - виклик змінної-функтора або лямбди `c(5)` (переписаний у [`CallNode.rewritten_call`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2567-L2577), де `target` — це `VarNode` із `decl`);
-   - захоплення у лямбді `[k]` (у [`LambdaNode.decl_node.inits`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2295-L2312) вже лежать `VarNode` із `decl` на зовнішні змінні);
-   - присвоєння `y := ...` ([`AssignNode.decl`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L311-L316)) та `p.x := ...` ([`FieldAssignNode.decl`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L327-L335)).
-2. **Підрахунок читань (`UseCounter`)**:
-   - Ключем у словнику є `id(decl)`, тому затінені змінні з однаковим ім'ям (як зовнішній і внутрішній `x` у Warm-up 2) рахуються окремо.
-   - Присвоєння `y := 5` або `p.x := 5` **не** рахується як читання `y` чи `p`.
-   - Якщо ініціалізатор декларації або права частина присвоєння містить виклик функції чи `read()`, змінна помічається як прочитана (`self.read(n)` / `self.read(n.decl)`), щоб не загубити побічні ефекти.
-   - Параметри функцій, поля структур та самі оголошення лямбд не реєструються як кандидати на видалення.
-3. **Очищення та ітерації (`Pruner` + цикл до нерухомої точки)**:
-   - На кожній ітерації `Pruner` перебудовує списки інструкцій у всіх блоках без мертвих `DeclNode` та без `AssignNode` / `FieldAssignNode`, що пишуть у ці мертві декларації.
-   - Цикл повторюється, доки за прохід не залишиться жодної декларації з `0` читань (наприклад, у Warm-up 1 спочатку видаляється `y`, через що кількість читань `x` падає до `0`, і на другій ітерації видаляється `x`).
-
-Переглянь, будь ласка, план — якщо все ок, можемо одразу реалізувати **Task 1** і перевірити його на обох програмах з Warm-up! Також скажи, чи плануємо робити **Additional Task (+1 бал)** після основних тасок.
+Ось структурований огляд того, що потрібно зробити для **Practice 10**:
 
 ---
 
-User:
-а уточни будь ласка шо таке  Pruner і навіщо він потрібен. Бо яшось заплутався. от ніби змінна не має читань, то ми її видаляємо апрунер нашо і шо це таке.
+### 🎯 Загальна мета практики
+Показати, що компілятор здатний збирати **повноцінний нативний бінарник**, який взаємодіє з користувачем через термінал (введення/виведення, структуры, методи, функції, розгалуження), а також підбити підсумки семестру у рефлексії.
 
-Model:
-Слово **Pruner** походить від англійського *to prune* — «обрізати сухі гілки дерева» (як садівник обрізає сухі гілки в саду).
-
-Дивись, чому процес розділений на два кроки в одній ітерації — **`UseCounter` (рахувальник)** і **`Pruner` (обрізувач)**:
-
-### 1. Чому не можна видалити змінну одразу, коли ми її бачимо?
-Коли ми йдемо по дереву згори донизу і бачимо оголошення:
-```text
-i32 mut y{10}
-```
-У цей момент ми **ще не знаємо**, чи буде хтось читати `y` нижче в коді (наприклад, через 20 рядків в `exit y`), чи ні.
-Тому спочатку **`UseCounter`** мусить пройти **все дерево до кінця** і просто порахувати у словник, скільки разів кожну змінну реально прочитали.
-
-Коли `UseCounter` закінчив обхід усього дерева, ми дивимось у його таблицю і відбираємо ті змінні, у яких `0` читань:
-```python
-dead = {d for d, k in counter.reads.items() if k == 0}
-```
-
-### 2. І от тепер приходить `Pruner` — це і є саме видалення!
-Ми вже знаємо список «мертвих» змінних (`dead`), але вони все ще лежать всередині нашого дерева (у списках `block.statements` всередині `ProgramNode`, різних `if`, `while`, функцій).
-
-**`Pruner`** — це просто функція/клас, який проходить по всіх блоках дерева і **чистить їхні списки `statements`**, викидаючи звідти дві речі:
-1. **Саме оголошення мертвої змінної** (`DeclNode`), наприклад `i32 mut y{10}`.
-2. **Усі присвоєння в цю мертву змінну** (`AssignNode` / `FieldAssignNode`), наприклад `y := 5` або `p.x := 5`.
-
-### Навіщо `Pruner` викидає ще й присвоєння?
-Уяви таку програму:
-```text
-i32 mut y{10}
-y := 20
-exit 0
-```
-Змінну `y` ніхто ніде не читає (`0` читань).
-Якби ми видалили тільки рядок `i32 mut y{10}`, але забули видалити `y := 20`, у програмі залишилося б присвоєння у неіснуючу змінну, і генератор LLVM IR впав би з помилкою.
-Тому `Pruner` іде по кожному блоку і робить приблизно таке:
-```python
-block.statements = [
-    stmt for stmt in block.statements
-    if not is_dead_decl_or_assign(stmt, dead)
-]
-```
-Тобто **`Pruner` — це буквально і є операція «видалити мертві змінні та присвоєння в них зі списків інструкцій дерева»**.
-
-А після того, як `Pruner` підчистив дерево, цикл `while True` запускає `UseCounter` ще раз по вже підчищеному дереву — бо всередині видаленого `i32 y{x}` могло сидіти єдине читання змінної `x`, і тепер `x` теж став не потрібен.
-
-Чи стало зрозуміліше, як працюють у парі `UseCounter` і `Pruner`? Якщо так — можемо переходити до реалізації або розібрати ще якийсь момент!
+Дедлайн: **п'ятниця, 13 листопада, 23:59**.
 
 ---
 
-User:
-окей, гуд. останнє уточнення, як саме наше дерево залишається валідним якшо ми буквально видаляємо ноди? чи чекай, створення і присвоєння значень ніби на хвостах відбуваютсья? чи н
+### 📊 Оцінювання (3.0 бали основні + 1.0 додатковий)
 
-Model:
-Ти дуже влучно намацав суть! Дивись, чому дерево гарантовано залишається валідним з двох причин:
-
-### 1. Де саме в дереві живуть `DeclNode` та `AssignNode`?
-У нашій мові оголошення змінної (`i32 x{10}`) і присвоєння (`x := 20`) — це **інструкції (`StmtNode`)**, а не вирази (`ExprNode`). Тобто вони не можуть стояти всередині арифметики типу `1 + (x := 5)`.
-
-А кожен блок у дереві (`ProgramNode` або `BlockNode`) влаштований дуже просто:
-```text
-BlockNode
- ├── statements: [ Stmt_1, Stmt_2, Stmt_3, ... ]   <-- звичайний список Python!
- └── exit: ExitNode (окреме поле, яке ніколи не видаляється)
-```
-Кожен `DeclNode` чи `AssignNode` — це просто окремий елемент у списку `statements`, від якого вниз росте лише його власне піддерево (вираз ініціалізатора `{10}` або права частина присвоєння `:= 20`). Від самого `DeclNode` ніякі інші інструкції блоку «вниз як діти» не ростуть.
-
-Тому коли ми викидаємо `DeclNode` чи `AssignNode` зі списку `statements`, ми просто виймаємо один елемент зі списку інструкцій блоку (умовно було `[Stmt_1, Stmt_2, Stmt_3]`, стало `[Stmt_1, Stmt_3]`). Обов'язковий `exit` у функції або програмі лежить в окремому полі `.exit`, тому він завжди залишається на місці.
-
-### 2. Чому ніхто в дереві не «зламається» через те, що `DeclNode` зник?
-Тому що ми видаляємо `DeclNode` **тільки тоді, коли його `reads == 0`**!
-- Це означає, що в усьому іншому дереві **немає жодного `VarNode`**, який би посилався на цей `DeclNode`.
-- Єдині вузли, які ще могли посилатися на цей `DeclNode` — це присвоєння в нього (`AssignNode` / `FieldAssignNode`), але ми видаляємо їх **разом із ним** у той самий момент.
-
-### Єдиний особливий випадок: порожній блок після видалення
-Наприклад:
-```text
-if true
-{
-    i32 unused{10}
-}
-exit 0
-```
-У синтаксисі початкового коду порожні фігурні дужки `{}` заборонені парсером. Але коли вже після парсера й чекера ми видалимо `i32 unused{10}`, у `then_block` список `statements` стане порожнім `[]`.
-І для дерева, і для генератора LLVM IR це абсолютно валідно: `visit_block` просто зробить 0 кроків циклу `for stmt in node.statements`, а `visit_if` згенерує перехід `br label %merge`.
-
-Тож дерево після кожного кроку `Pruner` залишається на 100% цілим і зв'язним. Починаємо писати код для **Task 1**?
+| Частина | Бали | Що оцінюється |
+|---|---|---|
+| **Task 1: Бінарник `points`** | **1.0** | Робота програми з файлу і руками в терміналі; універсальний друк полів структури (`gep` + `load` + `printf` по таблиці полів). |
+| **Task 1: Тести `tests/io`** | **0.5** | Три сесії (`sheet`, `none`, `all`) у тестовому раннері; проходження всіх тестів з прапорцем `--remove-unused` і без нього. |
+| **Task 2: Рефлексія** | **1.5** | Файл `reflection.md` (300–600 слів), 5 фіксованих пунктів із конкретними посиланнями на код. |
+| **Additional Task (FFI)** | **+1.0** | Підтримка `extern fn` для виклику C-функцій (0.5 за енд-ту-енд роботу, 0.5 за семантичні перевірки / 9 помилок). |
 
 ---
 
-User:
-океей, гуд. тоді перший таск можна імплементовувати. і давай одразу ж покривати таски відповідними тестами, аби не накопчиувать тєхборг))
+### 1. Task 1: Програма `points` та I/O сесії (1.5 бала)
 
-Model:
-**Task 1** імплементовано та протестовано!
+#### 1.1. Що робить програма
+Програма зчитує 3 точки (`Point { i32 x, i32 y }`), обчислює квадрат відстані кожної до початку координат через метод `d2()`, зчитує порогове число `d`, виводить усі точки, у яких `d2() == d`, і завершується кодом виходу (кількість знайдених точок):
+* Файл зберігається як `tests/io/points.txt`.
+* Важлива вимога: `print(p)` не повинен хардкодити тип `Point` — друк має проходити по таблиці полів структури універсально.
 
-### Що зроблено:
-1. У [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py):
-   - Додано [`has_call_or_read`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3716-L3729), [`UseCounter`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3732-L3846), [`Pruner`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3849-L3886) та цикл нерухомої точки [`remove_unused`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3889-L3896).
-   - У [`main()`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3931-L4019) та [run.sh](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/run.sh) додано підтримку прапорця `--remove-unused` на будь-якій позиції командного рядка.
-2. У [tests/run_tests.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py) та `tests/opt/`:
-   - Додано підтримку тестів оптимізації (`tests/opt/*.txt`, звірка `.astc` і перевірка однаковості виводу з прапорцем і без) та запуск усіх попередніх тестів `tests/ok` і `tests/err` через `./run.sh test --remove-unused` (або `REMOVE_UNUSED=1`).
-   - Створено 5 тестів для Task 1 у `tests/opt/`:
-     - [warmup1.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/opt/warmup1.txt)
-     - [warmup2.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/opt/warmup2.txt)
-     - [if_block_decl.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/opt/if_block_decl.txt)
-     - [call_kept.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/opt/call_kept.txt)
-     - [nothing_removed.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/opt/nothing_removed.txt)
-   - Усі **143 тести** проходять зеленим як без прапорця, так і з `--remove-unused`.
-
-Переходимо до **Task 2 (Unused Functions)**?
-
----
-
-User:
-окі. слухай перечитав компайлер, чи не забагато там всякої єрунди ти надодавав? конєшно провтикане рішення розділити його на окремі модулі призвело до появи цього франкенштейна-антипатерна, але ж ну саме зараз якось ніби забагто всього, нє?
-
-Model:
-Скоротив новий код майже вдвічі (прибрав майже 100 рядків бойлерплейту):
-- У [`UseCounter`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3732-L3831) об'єднав порожні методи (`visit_const = visit_bool = visit_read = visit_string_literal = _noop`), а також однакові обходи (`visit_field_assign = visit_assign`, `visit_member_fn = visit_fn_def`).
-- У [`Pruner`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3834-L3860) прибрав проміжні обгортки й залишив один компактний `match` у `prune_stmts`.
-- У [`main()`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3889-L3928) прибрав 4 дублікати блоків `try/except` — тепер читання файлу та обробка помилок відбуваються в одному місці.
-
-До речі, якщо хочеш не змішувати оптимізатор з рештою `compiler.py`, можемо взагалі винести `UseCounter`, `Pruner` та `remove_unused` в окремий файл `optimizer.py` (як у нас `lexer.py` лежить окремо). Як тобі зручніше — залишити тут чи винести в `optimizer.py`, і чи рухаємося далі до **Task 2 (Unused Functions)**?
-
----
-
-User:
-окей, закоміть пж
-
-Model:
-Закомічено (`0ec1d64`: `feat: implement Practice 9 Task 1 (unused variable removal) and tests`).
-
-Переходимо до **Task 2 (Unused Functions)**?
-
----
-
-User:
-так,  давай до таску два. тут я так розумію те саме, але дивимося на виклики функцій, якшо немає => видаляємо повністю ноду функцій і всіх її дєтєй? ну і також в декілька проходів робимо бо шо якшо функцю викликає інша, яку теж ніхто не викликає
-
-Model:
-**Task 2** готовий і займає всього кілька рядків!
-
-### Що додано:
-1. У [`UseCounter`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3732-L3835):
-   - додано словник `self.fn_calls: dict[str, int] = {}`;
-   - у `visit_fn_def` кожна глобальна функція реєструється з `0` викликів (`self.fn_calls.setdefault(n.name, 0)`);
-   - у `visit_call` для викликів глобальних функцій інкрементується лічильник `self.fn_calls[n.func_name]`.
-2. У [`Pruner`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3838-L3869) та [`remove_unused`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L3872-L3880):
-   - відфільтровуються функції з `0` викликів (`tree.fn_defs = [fn for fn in tree.fn_defs if fn.name not in self.dead_fns]`) у тому самому ітеративному циклі.
-3. Додано 6-й тест у `tests/opt/`: [fn_chain.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/opt/fn_chain.txt) (`twice` <- `helper` <- `unused`).
-   - Програма виводить `Program exit with result 4`, а в згенерованому `.ll` залишаються лише дві функції: `main` та `user_twice`.
-   - Усі **144 тести** зелені з прапорцем і без нього.
-
-Далі у нас залишилися:
-- **Task 3 (замітка в `README.md`)**: короткий розділ **Optimizations** про звільнення пам'яті видалених вузлів у Python (reference counting, відсутність зворотних посилань `parent`, замір через `weakref.ref(node)`) та обмеження для самопідживлюваних змінних (`k := k + 1`).
-- **Additional Task (+1 бал)**: видалення викликів функцій без побічних ефектів (`calls without effects`).
-
-Робимо спочатку замітку в `README.md` (щоб повністю закрити базові 3 бали), чи також ідемо на **Additional Task (+1)**?
-
----
-
-User:
-так і пропоную все ж оптимізатор винести в окремий файл, як лексер. старе трогати не будемо шоб не наламати дров, от оптимізатор го винесемо
-
-Model:
-Виніс оптимізатор в окремий модуль [optimizer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/optimizer.py):
-- Переніс класи `UseCounter`, `Pruner` та функцію `remove_unused` з [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py) до [optimizer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/optimizer.py).
-- У [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py) залишив імпорт `from optimizer import remove_unused`.
-- Усі 144 тести проходять успішно як у звичайному режимі, так і з прапорцем `--remove-unused`.
-
-Готовий продовжувати — скажи, чи переходимо до **Task 3** (замітка в `README.md`) та/або **Additional Task (+1 бал)**.
-
----
-
-User:
-окі гуд, закоміть будь ласка
-
-Model:
-Закомічено (`87ccde8`: `feat: implement Practice 9 Task 2 (unused global functions) and extract optimizer.py`).
-
-Переходимо до **Task 3** (замітка **Optimizations** у `README.md`) та/або **Additional Task (+1 бал)**?
-
----
-
-User:
-так давай, про шо там таск 3?
-
-Model:
-**Task 3 (0.5 бала) — Тести та замітка в `README.md`**:
-
-### 1. Тести (`tests/opt/` та сумісність)
-- Потрібно створити щонайменше 6 тестів у папці `tests/opt/`:
-  - `warmup1.txt` — перша програма з Warm-up (каскадне видалення `y`, потім `x`).
-  - `warmup2.txt` — друга програма з Warm-up (затінення `x`: зовнішній видаляється, внутрішній залишається).
-  - `if_block_decl.txt` — оголошення всередині `if`, яке видаляється (блок стає порожнім).
-  - `call_kept.txt` — змінна, що не читається, але викликає функцію з побічним ефектом (залишається).
-  - `nothing_removed.txt` — програма, де всі змінні використовуються (нічого не видаляється).
-  - `fn_chain.txt` — ланцюжок невикористаних функцій (Task 2).
-  Для кожного тесту мають бути файли `.astc` (вивід `--remove-unused --ast-checked`) та `.expected` (вивід програми, який має бути однаковим як з оптимізацією, так і без).
-- Тест-ранер [tests/run_tests.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py) повинен підтримувати запуск усіх попередніх тестів (`tests/ok/`, `tests/err/`) з прапорцем `--remove-unused`, і всі вони мають бути зеленими.
-
-### 2. Замітка в `README.md` про звільнення пам'яті ("Who frees a removed subtree")
-Потрібно додати розділ **Optimizations** у [README.md](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/README.md), де відповісти на питання:
-- **Мова та модель пам'яті**: Компілятор написано на Python 3.12 (CPython), де основним механізмом є підрахунок посилань (reference counting), а для циклів посилань використовується cyclic garbage collector (`gc`).
-- **Відсутність покажчиків на батька (`parent`)**: Наші вузли AST зберігають посилання лише вниз (до дітей) та на `DeclNode`, але не мають зворотних посилань на `parent`. Тому видалене піддерево не утворює циклів, і при видаленні зі списку `statements` лічильник посилань падає до 0 негайно.
-- **Експериментальний замір (`weakref.ref`)**: Додати до базового класу `Node` підтримку слабких посилань (`weakref_slot=True` у dataclass) та навести короткий код, який демонструє, що після `remove_unused` слабке посилання `ref()` одразу стає `None` навіть при вимкненому `gc` (`gc.disable()`).
-- **Обмеження підрахунку**: Зазначити, що змінна, яка живить сама себе (`k := k + 1`), або функції, які рекурсивно викликають одна одну по колу, не видаляються, бо їхній лічильник не досягає нуля.
-
-Чекаю на твоє «ок», щоб додати `weakref_slot=True` до `Node`, провести замір через `weakref.ref` і записати розділ **Optimizations** у `README.md`.
-
----
-
-User:
-ок, газ
-
-Model:
-**Task 3** виконано:
-
-1. **Підтримка слабких посилань у AST**:
-   - У [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py) для базового класу `Node` додано `@dataclass(slots=True, weakref_slot=True)`, що дозволяє створювати `weakref.ref` для вузлів дерева.
-2. **Замітка в [README.md](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/README.md)**:
-   - Додано розділ **Optimizations**, де описано механізм звільнення піддерев (CPython reference counting), відсутність покажчиків на батька (`parent`), через що вузли не мають циклічних залежностей і звільняються миттєво, а також обмеження для самопідживлюваних змінних (`k := k + 1`) та взаємних викликів.
-   - Наведено емпіричний вимір через `weakref.ref` та `gc.disable()`, що підтверджує негайне звільнення пам'яті вузла при видаленні з AST.
-3. **Тести**:
-   - Усі 6 тестів у `tests/opt/` готові та перевірені.
-   - Усі 144 тести проходять як з прапорцем `--remove-unused`, так і без нього.
-
-Готовий закомітити Task 3 або перейти до **Additional Task (+1 бал)** — як скажеш!
-
----
-
-User:
-а накидай но мені різних команд для тестування, в тому числі з крайніми випадками
-
-Model:
-Ось корисні команди для тестування компілятора та перевірки крайових випадків:
-
-### 1. Запуск тестового набору
+#### 1.2. Збірка нативного бінарника
+Замість `lli` збирається справжній ELF-бінарник:
 ```bash
-# Запуск усіх тестів без оптимізації
+python3 compiler.py tests/io/points.txt points.ll
+llc -filetype=obj -relocation-model=pic points.ll -o points.o
+clang -fPIE points.o -o points
+./points < tests/io/points.sheet.in
+```
+*(У бінарнику `printf` і `scanf` мають бути зовнішніми символами `U printf`, `U scanf`, які лінкуються з `libc`)*.
+
+#### 1.3. Три тестові сесії (`tests/io/`)
+При перенаправленні вводу `./points < file.in` набрані користувачем рядки **не** дублюються у вивід терміналу. Тому в `.expected` записуються лише промпти та вивід програми:
+1. `points.sheet` — стандартний сценарій (3 точки `(3 4)`, `(1 1)`, `(0 5)`, відстань `25`, вихідний код 2).
+2. `points.none` — жодна точка не співпадає (ті самі точки, відстань `7`, вихідний код 0).
+3. `points.all` — від'ємні координати (`-3 4`, `4 -3`, `5 0`, відстань `25`, вихідний код 3).
+
+#### 1.4. Оновлення тест-раннера
+Скрипт тестування (`tests/run_tests.py`) має підтримувати тести з директорії `tests/io/`: збирати бінарник через `llc` + `clang`, подавати `*.in` і порівнювати з `*.expected`. Усі тести (і старі, і нові) мають бути зеленими як з `--remove-unused`, так і без нього.
+
+---
+
+### 2. Task 2: Рефлексія `reflection.md` (1.5 бала)
+
+Файл `reflection.md` у корені репозиторію:
+* **Обсяг**: суворо **300–600 слів** (текст понад 600 слів не перевірятиметься).
+* **AI заборонено**: текст має бути написаний виключно самостійно.
+* **5 обов'язкових пунктів**:
+  1. Які фічі чи ідіоми з курсу ви вважаєте найбільш корисними?
+  2. Які фічі були розкриті недостатньо?
+  3. Наведіть щонайменше 3 приклади зі сфери мов і компіляторів, які найбільше здивували.
+  4. Які концепції чи підходи досі залишаються не зовсім зрозумілими?
+  5. Ідеї та пропозиції щодо змісту курсу.
+* **Критична вимога**: конкретика! Не просто враження, а посилання на конкретні файли, методи компілятора (`semantics.py`, правила генерації LLVM IR, оптимізації), конкретні тести тощо.
+
+---
+
+### 3. Додаткове завдання: Виклики C через `extern fn` (+1.0 бал)
+
+Дозволити оголошувати прототипи зовнішніх C-функцій:
+```text
+extern fn abs := (i32 v) -> i32
+extern fn isqrt := (i32 v) -> i32
+```
+* **Семантика та обмеження**:
+  * Оголошуються в секції функцій (після структур, до інструкцій).
+  * Не мають тіла `{ ... }`.
+  * Дозволені типи параметрів та результату: **тільки `i32` та `i64`** (жодних `bool` або структур, оскільки ABI передачі структур/булів відрізняється від C).
+  * Заборонені імена, які вже використовуються компілятором (`printf`, `scanf`, `main`, методи структур).
+* **Генерація коду**:
+  * В IR генерується `declare i32 @"abs"(i32 %".1")`.
+  * При оптимізації (`--remove-unused`): невикористаний `extern fn` видаляється; якщо є виклик — залишається.
+* **Тести**:
+  * `tests/ffi/geometry.txt` + `tests/ffi/geometry.c` (збірка `geometry.o` + `geometry.c` через `clang`).
+  * Програма в `tests/ok`, що викликає функції з `libc` (`abs`, `llabs`).
+  * Щонайменше 9 тестів на помилки в `tests/err/` на всі описані валідації.
+
+---
+
+### 4. Вимоги до здачі
+1. Гілка `practice-10`, pull request у `main` з рев'юером `vovaskochko`.
+2. Обов'язково заповнений `ai_usage.txt` (інструменти, промпти, що взято, що змінено). Відсутній або пустий файл = 0 за практику.
+3. Під час здачі викладачу показується:
+   - Робота бінарника `points` (через редирект `<` та вручну з клавіатури).
+   - Вивід `nm points.o` (з `U printf`, `U scanf`) та `points.ll`.
+   - Зелений прогін тестів з `--remove-unused` та без нього.
+   - `reflection.md`.
+   - *(Якщо робиться додаткове)*: сесія `geometry`, `nm geometry.o` та тести помилок FFI.
+
+---
+
+### З чого краще почати?
+1. Перевірити генерацію універсального друку структур у `compiler.py` на прикладі `Point` (чи немає там захардкоджень).
+2. Створити `tests/io/points.txt` та три сесії (`points.sheet`, `points.none`, `points.all`).
+3. Додати підтримку тестів `tests/io` у `tests/run_tests.py` та переконатися, що бінарник успішно збирається і проходить сесії.
+4. (Опційно) Реалізувати `extern fn` для +1 бала.
+5. Написати `reflection.md` та оновити `ai_usage.txt`.
+
+Як рухаємося — спочатку подивимося на Task 1 (структура `tests/io` і тест-раннер), чи одразу сплануємо додаткове завдання з `extern fn`?
+
+---
+
+User:
+а які вимоги до аі юзу в цій практиці?
+
+Model:
+У цій практиці вимоги до використання AI мають кілька **критично важливих правил та одне суворе обмеження**:
+
+---
+
+### 1. 🚫 Головна заборона: `reflection.md` пишеться БЕЗ AI
+У тексті практики прямо зазначено:
+> **"The reflection is your own text, written without an AI tool."**
+
+* **Task 2 (Рефлексію на 1.5 бала)** ви повинні написати **самостійно, своїми словами**.
+* Викладач перевіряє її особисто (людина, а не автогрейдер) і оцінює конкретику (ваші реальні враження, посилання на конкретні файли, тести чи рядки вашого компілятора).
+* Використовувати AI для генерації тексту рефлексії **заборонено**.
+
+---
+
+### 2. 📝 Обов'язкове оновлення `ai_usage.txt`
+> **"`ai_usage.txt` is updated for this practice (tools, prompts, what you took as-is, what you changed, or “not used”); a missing or stub file is 0 for the practice."**
+
+* Відсутність файлу, порожній файл або шаблон/заглушка (stub) означає **0 балів за всю практику**.
+* У файлі мають бути зафіксовані:
+  - Інструменти (наприклад, *Google Antigravity CLI, Gemini 3.8 Flash*);
+  - Промпти та запити;
+  - Що саме було згенеровано/взято as-is;
+  - Що ви змінили або допрацювали власноруч (і чому).
+  *(Якщо взагалі не використовували для коду — потрібно чітко написати `not used`)*.
+
+---
+
+### 3. ⚙️ Де AI дозволено і які обмеження на код:
+Для **Task 1** (написання програми `points.txt`, доопрацювання тест-раннера `run_tests.py`, перевірка кодогенерації) та **Additional Task** (`extern fn`):
+* Допомога AI дозволена (за умови фіксації в `ai_usage.txt`).
+* **Але є технічні обмеження компілятора:**
+  - Бінарник має збиратися саме з `.ll`, який генерує ваш компілятор (жодних правок `.ll` файлів руками чи переписування програми на C — за це 0 балів).
+  - Генерація IR виключно через `llvmlite.ir` (жодного склеювання IR через рядки).
+
+---
+
+User:
+окі напиши мені теплейт (тільки темплейт) зверху у файлі логу, за прикладом попередніх практик чи стейджів
+
+Model:
+Додав темплейт на самий початок [ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt) за стандартом попередніх практик:
+
+* **Розділ 1: Tools Used** (назва інструменту, модель, скоуп використання).
+* **Розділ 2: What Was Taken, Changed, and Why** (що згенеровано, що змінено/перевірено вручну).
+* **Розділ 3: What I Understood (In My Own Words)** (підсумок власними словами щодо бінарної збірки, лінкування чи FFI).
+* **Розділ 4: Full Prompts and Chat Transcripts** (поточні та подальші логи спілкування).
+
+---
+
+User:
+окей, беремось за перший таск. розкажи трішки  детальніше про нього, бо я поки не зроз до кінця як і що потрібно зробити
+
+Model:
+**Task 1 («The Program & I/O Sessions»)** — це фінальна перевірка того, що ваш компілятор створює не просто абстрактні абстрактні тексти в пам'яті під `lli`, а **справжній автономний бінарник (ELF)**, який можна запустити в Linux, вводити дані через клавіатуру або файл і отримувати результат.
+
+Давайте розберемо детально: з чого складається таск, що потрібно написати і як це працює.
+
+---
+
+### 1. Що робить сама програма `points`?
+
+У файлі `tests/io/points.txt` пишеться програма мовою нашого курсу:
+
+```text
+struct Point
+{
+    i32 x
+    i32 y
+    fn d2 := () -> i32
+    {
+        i32 r{x * x + y * y}
+        exit r
+    }
+}
+fn report := (Point p, i32 d) -> i32
+{
+    i32 mut hit{0}
+    if p.d2() == d
+    {
+        print(p)
+        hit := 1
+    }
+    exit hit
+}
+print("Enter point 1 (x y):")
+Point p1{read(), read()}
+print("Enter point 2 (x y):")
+Point p2{read(), read()}
+print("Enter point 3 (x y):")
+Point p3{read(), read()}
+print("Enter distance squared:")
+i32 d{read()}
+i32 n{report(p1, d) + report(p2, d) + report(p3, d)}
+exit n
+```
+
+**Як вона працює:**
+1. Оголошено структуру `Point` з полями `x, y` та методом `d2()`, який повертає квадрат відстані до $(0, 0)$ ($x^2 + y^2$).
+2. Оголошено функцію `report(p, d)`: якщо `p.d2() == d`, вона друкує точку `print(p)` і повертає `1`, інакше повертає `0`.
+3. Основна програма виводить підказки (`print("Enter point 1 (x y):")`) і через `read()` зчитує координати трьох точок ($x$ і $y$ для кожної).
+4. Далі зчитує пороговий квадрат відстані `d`.
+5. Підсумовує результати викликів `report` і завершується через `exit n` (де $n$ — кількість точок, квадрат відстані яких дорівнює `d`).
+
+---
+
+### 2. Як програма збирається в нативний бінарник?
+
+Замість запуску через інтерпретатор LLVM JIT (`lli`), ми проходимо повний пайплайн компіляції:
+```bash
+# 1. Компілятор генерує LLVM IR (.ll)
+python3 compiler.py tests/io/points.txt points.ll
+
+# 2. llc компілює LLVM IR у машинний об'єктний файл (.o)
+llc -filetype=obj -relocation-model=pic points.ll -o points.o
+
+# 3. clang лінкує об'єктний файл з libc у виконуваний файл points
+clang -fPIE points.o -o points
+```
+
+**Чому потрібні флаги `-relocation-model=pic` та `-fPIE`?**
+* Сучасний Linux вимагає Position Independent Executable (PIE) для безпеки (ASLR).
+* Якщо не передати `-relocation-model=pic` в `llc`, то `clang` видасть помилку лінкування: `relocation against symbol ... can not be used when making a PIE object; recompile with -fPIE`.
+
+**Що всередині `points.o`?**
+Якщо виконати `nm points.o`, ми побачимо:
+* `T Point_d2` — наш скомпільований метод;
+* `T user_report` — наша функція;
+* `T main` — точка входу;
+* `U printf` та `U scanf` — невизначені символи, які лінкер `clang` автоматично підтягує зі стандартної бібліотеки C (`libc.so.6`).
+
+---
+
+### 3. Що таке I/O сесії (`tests/io/`) і чому вони розділені на `.in` та `.expected`?
+
+Коли ви запускаєте програму вручну в терміналі:
+```text
+$ ./points
+Enter point 1 (x y):
+3 4
+Enter point 2 (x y):
+1 1
+Enter point 3 (x y):
+0 5
+Enter distance squared:
+25
+Point{x: 3, y: 4}
+Point{x: 0, y: 5}
+Program exit with result 2
+```
+Ви бачите і те, що друкує програма, і те, що вводите ви.
+
+**Але в автоматичних тестах введення перенаправляється з файлу:**
+```bash
+./points < tests/io/points.sheet.in
+```
+У цьому випадку термінал **не відлунює (echo)** введений текст у вивід. Тому програма в `stdout` віддає **тільки свої власні повідомлення**!
+
+Тому сесія розбивається на два файли:
+* `points.sheet.in` (те, що надходить на `stdin`):
+  ```text
+  3 4
+  1 1
+  0 5
+  25
+  ```
+* `points.sheet.expected` (те, що програма видає у `stdout`):
+  ```text
+  Enter point 1 (x y):
+  Enter point 2 (x y):
+  Enter point 3 (x y):
+  Enter distance squared:
+  Point{x: 3, y: 4}
+  Point{x: 0, y: 5}
+  Program exit with result 2
+  ```
+
+Вимога практики — підготувати **3 таких сесії**:
+1. `points.sheet` — стандартний приклад (вище);
+2. `points.none` — жодна точка не підходить (наприклад, ті самі точки, але відстань 7 $\rightarrow$ виводить `Program exit with result 0`);
+3. `points.all` — від'ємні координати (`-3 4`, `4 -3`, `5 0`, відстань 25 $\rightarrow$ виводить усі 3 точки і `Program exit with result 3`).
+
+---
+
+### 4. Що потрібно зробити в коді для Task 1?
+
+1. **Створити папку `tests/io/`** і покласти туди:
+   * `points.txt`
+   * `points.sheet.in` та `points.sheet.expected`
+   * `points.none.in` та `points.none.expected`
+   * `points.all.in` та `points.all.expected`
+2. **Оновити наш тестовий раннер `tests/run_tests.py`**:
+   * Зараз він ганяє `tests/ok`, `tests/err` та `tests/opt`.
+   * Потрібно навчити його також проходити `tests/io/`: для кожної програми `NAME.txt` збирати бінарник через `llc` + `clang`, запускати для кожної сесії `NAME.S.in`, порівнювати вивід з `NAME.S.expected` і перевіряти, що код виходу 0.
+   * Перевірити, що всі тести проходять і без `--remove-unused`, і з `--remove-unused`.
+3. **Переконатися, що `print(p)` не містить захардкоджених перевірок на `Point`**:
+   * Ми щойно перевірили [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py) — наш `emit_print_struct` уже повністю універсальний і ітерується по полях будь-якої структури через `gep` + `load` + `printf`!
+
+Хочете, зараз створимо тестові файли для `points` і запустимо збірку бінарника вручну, щоб побачити його в дії?
+
+---
+
+User:
+а, ну тобто ми просто створюємо програму і пишемо на неї тести, як і раніше. окрім цього треба ранер оновити, так? якщо так то я наскефолдив там вже трошки, потрібно дописати тести та власне оновити сам ранер
+
+Model:
+Саме так! Ми написали саму програму, підготували всі тестові сесії та оновили тестовий раннер.
+
+Ось що зроблено та перевірено:
+
+---
+
+### 1. Створено та заповнено всі сесії в `tests/io/`:
+* [points.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.txt) — програма з умов практики (`Point` з методом `d2()`, `report(p, d)`, зчитування 3 точок і порогу через `read()`).
+* [points.sheet.in](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.sheet.in) та [points.sheet.expected](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.sheet.expected):
+  - Ввід: координати `3 4`, `1 1`, `0 5`, поріг `25`.
+  - Очікуваний вивід: 2 точки (`Point{x: 3, y: 4}`, `Point{x: 0, y: 5}`) та `Program exit with result 2`.
+* [points.none.in](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.none.in) та [points.none.expected](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.none.expected):
+  - Поріг `7` (жодна точка не підходить) $\rightarrow$ `Program exit with result 0`.
+* [points.all.in](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.all.in) та [points.all.expected](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.all.expected):
+  - Від'ємні координати `-3 4`, `4 -3`, `5 0`, поріг `25` (підходять усі три) $\rightarrow$ друк усіх 3 точок та `Program exit with result 3`.
+
+---
+
+### 2. Оновлено тестовий раннер [tests/run_tests.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py):
+* Автоматично підхоплює програми з `tests/io/` (а також підготовлений до `tests/ffi/` для додаткового завдання).
+* Збирає кожну програму через нативний пайплайн: `compiler.py` $\rightarrow$ `llc -filetype=obj -relocation-model=pic` $\rightarrow$ `clang -fPIE`.
+* Запускає отриманий бінарник для кожної сесії `NAME.*.in`, передає дані на `stdin` та порівнює вивід з `NAME.*.expected`.
+
+---
+
+### 3. Створено допоміжний скрипт збірки [full_compiler.sh](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/full_compiler.sh):
+Згідно з описом практики (стор. 2), цей скрипт дозволяє в один рядок зібрати бінарник вручну:
+```bash
+./full_compiler.sh tests/io/points.txt points
+./points < tests/io/points.sheet.in
+```
+
+---
+
+### 4. Результати тестування:
+* **Без прапорця**:
+  ```text
+  ✅ PASS: io/points.all (output matches expected)
+  ✅ PASS: io/points.none (output matches expected)
+  ✅ PASS: io/points.sheet (output matches expected)
+  Result: 151 passed, 0 failed.
+  ```
+* **З `--remove-unused`**:
+  ```text
+  Running 151 tests (with --remove-unused)...
+  Result: 151 passed, 0 failed.
+  ```
+
+Всі файли знаходяться в робочому дереві гілки `practice-10`. 
+
+**Task 1 повністю готовий і протестований.** Як рухаємося далі — беремося за **Additional Task** (`extern fn` на +1 бал) чи перейдемо до написання **`reflection.md`**?
+
+---
+
+User:
+дай но я його ще потестую, накидай мені команд шоб я не писав руками
+
+Model:
+Ось готові команди для копіювання в термінал:
+
+---
+
+### 1. Перевірка всіх тестів через раннер (як вимагає автогрейдер)
+
+```bash
+# Звичайний прогін (усі 151 тест, включно з трьома сесіями io/points):
 python3 tests/run_tests.py
 
-# Запуск усіх тестів з оптимізацією --remove-unused (має бути green на всіх 144 тестах)
+# Прогін з прапорцем оптимізації --remove-unused:
 python3 tests/run_tests.py --remove-unused
 ```
 
-### 2. Перевірка окремих оптимізаційних тестів (Task 1 та Task 2)
+---
+
+### 2. Повна ручна збірка бінарника (те, що просять показати викладачу)
+
 ```bash
-# Warm-up 1: каскадне видалення y -> x
-python3 compiler.py --remove-unused --ast-checked tests/opt/warmup1.txt
+# Крок 1: компіляція в LLVM IR
+python3 compiler.py tests/io/points.txt points.ll
 
-# Warm-up 2: затінення змінних (зовнішній x видаляється, внутрішній залишається)
-python3 compiler.py --remove-unused --ast-checked tests/opt/warmup2.txt
+# Крок 2: генерація PIC об'єктного файлу
+llc -filetype=obj -relocation-model=pic points.ll -o points.o
 
-# Видалення змінної усередині if-блоку (блок стає порожнім)
-python3 compiler.py --remove-unused --ast-checked tests/opt/if_block_decl.txt
+# Крок 3: лінкування через clang з libc
+clang -fPIE points.o -o points
 
-# Змінна не читається, але містить виклик із print (має залишитися)
-python3 compiler.py --remove-unused --ast-checked tests/opt/call_kept.txt
-
-# Task 2: трирівневий ланцюжок функцій (twice <- helper <- unused)
-python3 compiler.py --remove-unused --ast-checked tests/opt/fn_chain.txt
+# Крок 4: перевірка символів (має показати U printf, U scanf, T Point_d2, T main)
+nm points.o
 ```
-
-### 3. Перевірка згенерованого LLVM IR
-```bash
-# Переконатися, що у згенерованому .ll для fn_chain.txt визначено тільки twice та main:
-python3 compiler.py --remove-unused tests/opt/fn_chain.txt /tmp/fn_chain.ll
-grep "define " /tmp/fn_chain.ll
-# Очікується: тільки @"twice" та @main
-```
-
-### 4. Крайові випадки для ручної перевірки
-- **Самопідживлення (`k := k + 1`)**: змінна `k` ніде більше не використовується, але через читання у правій частині не видаляється.
-- **Декілька однакових імен у різних блоках**: правильне розрізнення за `id(decl)`, а не за іменем рядка.
-- **Порожні блоки після видалення**: перевірка, що парсер не ламається, а LLVM IR генерує коректний `br label`.
-- **Взаємна рекурсія невикористаних функцій**: дві функції, які викликають лише одна одну, не видаляються базовим алгоритмом (лічильник > 0).
-
-Якщо захочеш закомітити Task 3 або перейти до **Additional Task (+1 бал)** — дай знати!
 
 ---
 
-User:
-олрайт, коміть. в чому додатковий таск полягає?
+### 3. Прогін трьох тестових сесій через файл (`<`)
 
-Model:
-Закомічено! (`ae69f69`: `docs: add Optimizations note to README and support weakref slot`).
+```bash
+# Сесія 1: points.sheet (має знайти 2 точки, код виходу 2)
+./points < tests/io/points.sheet.in
+
+# Сесія 2: points.none (відстань 7, жодна не підходить, код виходу 0)
+./points < tests/io/points.none.in
+
+# Сесія 3: points.all (від'ємні координати, підходять усі 3 точки, код виходу 3)
+./points < tests/io/points.all.in
+```
 
 ---
 
-### У чому полягає Additional Task (+1 бал) — "Calls without effects"
+### 4. Тестування в один клік через скрипт `full_compiler.sh`
 
-У **Task 1** ми використовували дуже консервативне правило:
-> *Якщо ініціалізатор змінної чи вираз у `:=` містить будь-який виклик функції (`CallNode` / `MemberCallNode`), ми вважаємо це побічним ефектом і завжди зберігаємо змінну та виклик.*
+```bash
+./full_compiler.sh tests/io/points.txt points && ./points < tests/io/points.sheet.in
+```
 
-Але насправді більшість викликів (наприклад, чисті математичні функції типу `square(3)`) **нічого не друкують, нічого не читають і не змінюють пам'ять**. Якщо результат такого виклику ніхто не читає (`i32 a{square(3)}`), його можна безпечно видалити!
+---
 
-#### Суть додаткового таску:
-Замість `has_call_or_read`, ми видаляємо невикористану змінну навіть тоді, коли її вираз містить виклик функції, **якщо ця функція не має спостережуваних побічних ефектів**.
+### 5. Ручний інтерактивний ввід з клавіатури
 
-Змінна чи присвоєння залишаються тільки тоді, коли вираз містить `read()` або виклик функції, яка має **effect**:
-
-1. **Прямі ефекти**:
-   - Функція у своєму тілі містить `print` або `read()`.
-   - Це мутуюча member-функція структури (вона змінює стан об'єкта, на якому викликана: наприклад, `c.bump()`).
-   - Функція може не повернутися (зависнути/зациклитися): її тіло містить `while`, або вона рекурсивно викликає себе напряму чи через цикл. Зациклення є спостережуваним ззовні, тому такі виклики не можна викидати.
-2. **Транзитивні ефекти**:
-   - Функція викликає іншу функцію, яка має ефект (наприклад, `relay` викликає `loud`, яка робить `print`).
-   - Оскільки функції можуть викликати одна одну, множина функцій з ефектами обчислюється як **fixpoint**: починаємо з перших трьох правил і додаємо тих, хто їх викликає, поки множина не перестане змінюватися.
-   - Для callable-об'єктів (лямбд чи структур із `call`) — це перевірка їхнього методу `call`.
-
-#### Приклад з методички:
+Запустіть:
+```bash
+./points
+```
+І введіть по черзі (як промптить):
 ```text
-fn square := (i32 a) -> i32 {
-    i32 r{a * a}
-    exit r
-}
-fn quiet := (i32 a) -> i32 {
-    exit square(a)
-}
-fn loud := (i32 a) -> i32 {
-    print(a)
-    exit a
-}
-
-i32 a{square(3)}   # Чиста: немає print/read/while/mutation -> видаляється
-i32 b{quiet(4)}    # Викликає чисту -> чиста -> видаляється
-i32 c{loud(5)}     # Робить print -> МАЄ ЕФЕКТ -> ЗАЛИШАЄТЬСЯ
-exit 0
+3 4
+1 1
+0 5
+25
 ```
-- **Без додаткового таску** (Task 1): `a` і `b` залишаються, бо містять виклики.
-- **З додатковим таском**:
-  1. Ітерація 1: `a` і `b` видаляються.
-  2. Ітерація 2: функція `quiet` більше ніким не викликається -> видаляється.
-  3. Ітерація 3: функція `square` більше ніким не викликається -> видаляється.
-  4. Залишається тільки `loud`, оголошення `c` та `exit 0`. Програма виводить `5` і виходить з `0`.
-
-Також перевіряються:
-- `c.bump()` (мутуючий метод) — зберігається.
-- `c.peek()` (лише читає поле) — видаляється, якщо результат не використовується.
-- функції з `while` або рекурсією — зберігаються.
-
-Робимо додатковий таск?
 
 ---
 
 User:
-о ну звучить супер, а як це реалізувати?
+отут бага без аутпута. 
+
+також, для чого ти створив файл @[/home/ubuntu/cs400/cs400-course-repo-vkatsel/full_compiler.sh] &
 
 Model:
-Реалізація насправді дуже логічна й компактна, бо наш `compiler.py` уже має частину цієї інформації (наприклад, прапорець `is_mutating` для member-функцій).
+### 1. Щодо «баги без аутпута» на скріншоті:
 
-Ось як це влаштовано крок за кроком:
+Тут насправді **все спрацювало математично точно**, помилки немає:
 
----
+Подивіться на координати, які ви ввели:
+* **Точка 1**: `1 2` $\rightarrow x^2 + y^2 = 1^2 + 2^2 = 1 + 4 =$ **`5`**
+* **Точка 2**: `3 4` $\rightarrow x^2 + y^2 = 3^2 + 4^2 = 9 + 16 =$ **`25`**
+* **Точка 3**: `-1 -2` $\rightarrow x^2 + y^2 = (-1)^2 + (-2)^2 = 1 + 4 =$ **`5`**
 
-### Крок 1. Визначення «ефектів» функцій (Effect Analysis)
+Далі ви ввели `Enter distance squared:` **`10`**.
 
-Кожна функція у програмі ідентифікується парою або рядком:
-- Глобальна функція: `"fn:name"`
-- Member-функція структури / лямбди: `("struct_name", "method_name")`
+Жодна з ваших точок не має суми квадратів $10$ ($5 \ne 10$, $25 \ne 10$, $5 \ne 10$). Тому:
+* жодна точка не потрапила під умову `p.d2() == d`;
+* нічого не надрукувалося;
+* функція `report` тричі повернула `0`;
+* результат виходу: **`Program exit with result 0`**.
 
-Ми проходимо по тілу кожної функції й збираємо:
-1. **Чи має вона безпосередній ефект:**
-   - Чи є всередині тіла `PrintNode`?
-   - Чи є всередині тіла `ReadNode`?
-   - Чи є `WhileNode`?
-   - Для member-функцій: чи є вона мутуючою (`is_mutating == True`)?
-2. **Які інші функції вона викликає:**
-   - Список прямих викликів глобальних функцій та member-функцій.
-
----
-
-### Крок 2. Обчислення циклів (рекурсії) та замикання (Fixpoint)
-
-1. **Рекурсія / потенційне зациклення:**
-   - Будуємо граф викликів між функціями `caller -> callee`.
-   - Якщо з функції `f` можна по графу дійти назад до самої `f` (пряма чи взаємна рекурсія), вона позначається як така, що має ефект (бо рекурсія може не завершитися).
-2. **Поширення ефектів (Fixpoint):**
-   - Робимо простий цикл `while changed`:
-   - Якщо функція `A` викликає функцію `B`, і `B` позначена як така, що має ефект, то й `A` стає функцією з ефектом (`effects.add(A)`).
-   - Повторюємо, поки множина не перестане рости.
+> 💡 **Як отримати 10:**  
+> Щоб квадрат відстані був $10$, координати мають бути, наприклад, `1 3` або `3 1` ($1^2 + 3^2 = 1 + 9 = 10$), або `-1 3`.  
+> Спробуйте ввести, наприклад:
+> ```text
+> 1 3
+> 3 1
+> 2 2
+> 10
+> ```
+> І воно виведе дві точки `Point{x: 1, y: 3}` та `Point{x: 3, y: 1}`, а в кінці: `Program exit with result 2`.
 
 ---
 
-### Крок 3. Перевірка виразів: `has_effect(expr)` замість `has_call_or_read(expr)`
+### 2. Для чого створено `full_compiler.sh`?
 
-Зараз у нас було:
-```python
-def has_call_or_read(expr):
-    match expr:
-        case ReadNode() | CallNode() | MemberCallNode():
-            return True
-        ...
-```
+Цей файл згаданий прямо в інструкції до практики ([CS400_Practice_10.md](file:///home/ubuntu/cs400/.agents/w10-files/CS400_Practice_10.md), рядок 90):
+> ```bash
+> python3 compiler.py tests/io/points.txt points.ll
+> llc -filetype=obj -relocation-model=pic points.ll -o points.o
+> clang -fPIE points.o -o points
+> ./points < tests/io/points.sheet.in
+> ./points
+> ```
+> *"The same lines can live in a script, `full_compiler.sh`."*
 
-А тепер буде:
-```python
-def has_effect(expr, effect_fns):
-    match expr:
-        case ReadNode():
-            return True
-        case CallNode(func_name=fn):
-            # Якщо це глобальна функція з ефектом
-            return fn in effect_fns
-        case MemberCallNode(struct_name=st, func_name=m):
-            # Якщо це метод або call лямбди з ефектом
-            return (st, m) in effect_fns
-        case BinOpNode(left=l, right=r):
-            return has_effect(l, effect_fns) or has_effect(r, effect_fns)
-        ...
-```
+Викладач запропонував зберегти ці три команди в `full_compiler.sh`, щоб не вводити пайплайн `compiler.py -> llc -> clang` щоразу руками під час демонстрації.
 
----
-
-### Крок 4. Інтеграція в цикл оптимізації `remove_unused`
-
-На кожній ітерації нашого циклу:
-1. Аналізуємо ефекти актуальних функцій у дереві -> отримуємо множину `effect_fns`.
-2. Запускаємо `UseCounter(effect_fns)`.
-   - Декларації `DeclNode` та присвоєння `AssignNode` залишаються (`self.read(decl)`), тільки якщо `has_effect(value, effect_fns) == True`!
-   - Якщо у виразі стоїть чистий виклик (наприклад, `square(3)`), `has_effect` повертає `False`, тому змінна **не** вважається прочитаною і може бути видалена!
-3. `Pruner` викидає мертві змінні та функції з `0` викликів.
-4. Оскільки видалення `i32 a{square(3)}` прибирає виклик `square(3)`, на наступній ітерації `square` матиме 0 викликів і видалиться сама функція.
-
-Все працює в єдиному ітеративному циклі.
-
-Якщо підхід зрозумілий і погоджуєш — можу реалізувати цей аналіз у [optimizer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/optimizer.py) та додати тестові файли згідно з умовами методички!
+Але якщо ви вважаєте його зайвим у репозиторії — скажіть, я його одразу видалю!
 
 ---
 
 User:
-океей, давай спробуємо, ніби все зрозуміло. також питання наперед, які вимоги да аі юзеджу тут в практиці?
+хм, а зіба ми не маємо повідомляти якраз у таких пиадках шо нема відповідно чого виводити
 
 Model:
-Щодо **`ai_usage.txt`** — у методичці є пряма вимога (рядок 7):
-> *"`ai_usage.txt` is updated for this practice (tools, prompts, what you took as-is, what you changed, or “not used”); a missing or stub file is 0 for the practice."*
+Ні, якраз **нічого додаткового виводити не треба**. Повідомленням про те, що нічого не знайдено, є саме фінальний рядок:
+```text
+Program exit with result 0
+```
 
-Також згідно з правилами проекту:
-- Файл ведеться у корені репозиторію: `cs400-course-repo-vkatsel/ai_usage.txt`.
-- Він дзеркалиться для Moodle-здачі у `/home/ubuntu/cs400/.agents/w9-files/ai_usage.txt`.
-- Структура містить: інструменти (IDE / Agent: Antigravity / Gemini), запити користувача, що взято як є, що змінено та архітектурні рішення.
+Це прямо зафіксовано в умові практики ([CS400_Practice_10.md](file:///home/ubuntu/cs400/.agents/w10-files/CS400_Practice_10.md), рядок 123):
+> *"`points.none` , where nothing matches (the same points with 7: **only the prompts and `Program exit with result 0`** )"*
 
-### Реалізація Additional Task (Calls Without Effects):
-1. **`EffectAnalyzer`**:
-   - Обходить AST і шукає функції/методи з прямими спостережуваними ефектами (`print`, `read()`, `while`, мутація полів через `AssignNode(is_this_field=True)`).
-   - Будує граф викликів `caller -> callees`, виявляє пряму та взаємну рекурсію (функції, які можуть не завершитися).
-   - Запускає фікспоінт-поширення: якщо функція `A` викликає функцію `B` з ефектом, `A` також помічається як така, що має ефект.
-2. **`has_effect(expr, effect_keys)`**:
-   - Перевіряє, чи містить вираз `read()` або виклик функції/методу/лямбди з ефектом.
-   - Чисті функції (без ефектів) не вважаються ефектом, тому змінні, які лише приймають їхній результат і більше ніде не читаються, видаляються.
-3. **Нові тести для Additional Task**:
-   - `tests/opt/additional_chain.txt` — чисті функції `square` та `quiet` видаляються, а функція `loud` (з `print`) та змінна `c` залишаються.
-   - `tests/opt/additional_counter.txt` — мутуючий `c.bump()` залишається, а чистий `c.peek()` видаляється.
-   - `tests/opt/additional_loop_rec.txt` — функції з `while` та рекурсією залишаються, а чиста функція видаляється.
-   - `tests/opt/additional_lambda.txt` — лямбда з `print` залишається, а чиста видаляється.
+І в коді програми `points.txt` (який дано в завданні) немає жодної гілки `else` чи окремого повідомлення:
+```text
+fn report := (Point p, i32 d) -> i32
+{
+    i32 mut hit{0}
+    if p.d2() == d
+    {
+        print(p)
+        hit := 1
+    }
+    exit hit
+}
+...
+i32 n{report(p1, d) + report(p2, d) + report(p3, d)}
+exit n
+```
 
-Усі 148 тестів успішно проходять як без оптимізації, так і з прапорцем `--remove-unused`.
+Коли $n = 0$, інструкція `exit n` завершує програму і друкує `Program exit with result 0`. Якщо додати туди якийсь додатковий `print`, автогрейдер завалить сесію `points.none`.
 
 ---

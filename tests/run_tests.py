@@ -73,7 +73,80 @@ cfunc()
     return None
 
 
-def run_single_test(test_file: Path, tmpdir: str, optimize: bool = False) -> tuple[bool, str]:
+def run_single_test(test_item: Path | tuple[Path, Path | None], tmpdir: str, optimize: bool = False) -> tuple[bool, str]:
+    if isinstance(test_item, tuple):
+        test_file, session_in = test_item
+        test_name = test_file.stem
+        parent_name = test_file.parent.name
+        sess_name = (
+            session_in.name[len(test_name) + 1 : -3]
+            if session_in is not None
+            else None
+        )
+        label = f"{parent_name}/{test_name}.{sess_name}" if sess_name else f"{parent_name}/{test_name}"
+        expected_file = (
+            session_in.with_suffix(".expected")
+            if session_in is not None
+            else test_file.with_suffix(".expected")
+        )
+        expected_text = (
+            expected_file.read_text(encoding="utf-8").strip()
+            if expected_file.exists()
+            else None
+        )
+
+        try:
+            content = test_file.read_bytes()
+        except Exception as e:
+            return False, f"❌ FAIL: {label} (unable to read file: {e})"
+
+        try:
+            mod = compile_source(content, optimize=optimize)
+        except CompileError as e:
+            return False, f"❌ FAIL: {label} (compilation error: {e})"
+        except Exception as e:
+            return False, f"❌ FAIL: {label} (compiler crash: {e})"
+
+        tag = f"{sess_name}_{optimize}" if sess_name else str(optimize)
+        out_ll = Path(tmpdir) / f"{test_name}_{tag}.ll"
+        out_o = Path(tmpdir) / f"{test_name}_{tag}.o"
+        out_bin = Path(tmpdir) / f"{test_name}_{tag}.bin"
+
+        out_ll.write_text(str(mod), encoding="utf-8")
+
+        try:
+            subprocess.run(
+                ["llc", "-filetype=obj", "-relocation-model=pic", str(out_ll), "-o", str(out_o)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            clang_cmd = ["clang", "-fPIE", str(out_o)]
+            c_source = test_file.with_suffix(".c")
+            if c_source.exists():
+                clang_cmd.append(str(c_source))
+            clang_cmd.extend(["-o", str(out_bin)])
+            subprocess.run(clang_cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            return False, f"❌ FAIL: {label} (native build error: {e.stderr or e})"
+
+        stdin_text = session_in.read_text(encoding="utf-8") if session_in and session_in.exists() else None
+        res = subprocess.run([str(out_bin)], input=stdin_text, capture_output=True, text=True)
+        if res.returncode != 0:
+            return False, f"❌ FAIL: {label} (binary exited with code {res.returncode}: {res.stderr})"
+
+        actual_output = res.stdout.strip()
+        if expected_text is not None and actual_output != expected_text:
+            msg = (
+                f"❌ FAIL: {label}\n"
+                f"   Expected output: {expected_text}\n"
+                f"   Actual output:   {actual_output}"
+            )
+            return False, msg
+
+        return True, f"✅ PASS: {label} (output matches expected)"
+
+    test_file = test_item
     test_name = test_file.stem
     parent_name = test_file.parent.name
     label = f"{parent_name}/{test_name}" if parent_name == "opt" else test_name
@@ -214,17 +287,32 @@ def main() -> None:
 
     opt_dir = tests_dir / "opt"
     opt_files = sorted(list(opt_dir.glob("*.txt"))) if opt_dir.exists() else []
-    test_files = sorted(
+    standard_files = sorted(
         list((tests_dir / "ok").glob("*.txt"))
         + list((tests_dir / "err").glob("*.txt"))
     ) + opt_files
 
-    if not test_files:
+    io_items: list[tuple[Path, Path | None]] = []
+    for d_name in ("io", "ffi"):
+        d = tests_dir / d_name
+        if not d.exists():
+            continue
+        for txt_file in sorted(d.glob("*.txt")):
+            sessions = sorted(d.glob(f"{txt_file.stem}.*.in"))
+            if sessions:
+                for s in sessions:
+                    io_items.append((txt_file, s))
+            else:
+                io_items.append((txt_file, None))
+
+    test_items: list[Path | tuple[Path, Path | None]] = [*standard_files, *io_items]
+
+    if not test_items:
         print("No test files found.")
         sys.exit(1)
 
     mode_str = " (with --remove-unused)" if optimize else ""
-    print(f"Running {len(test_files)} tests{mode_str}...\n")
+    print(f"Running {len(test_items)} tests{mode_str}...\n")
 
     workers = min(8, (os.cpu_count() or 2) * 2)
     passed = 0
@@ -232,7 +320,7 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            for ok, msg in executor.map(lambda tf: run_single_test(tf, tmpdir, optimize), test_files):
+            for ok, msg in executor.map(lambda item: run_single_test(item, tmpdir, optimize), test_items):
                 print(msg)
                 if ok:
                     passed += 1
