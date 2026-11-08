@@ -5,23 +5,30 @@
 ## 1. Tools Used
 
 - **Tool Name**: Google Antigravity CLI (Agentic Coding Assistant)
-- **Model**: Gemini 3.8 Flash (Medium)
-- **Usage Scope**: [TODO: Scope of usage for Practice 10, e.g., Task 1 points binary and I/O runner, Additional Task extern fn, tests]
+- **Model**: Gemini 3.8 Flash (Medium), Gemini 4 Argon
+- **Usage Scope**: ssisting with Practice 10 Task 1: setting up I/O sessions (sheet, none, all), extending the automated test runner tests/run_tests.py to compile and execute native binaries via llc and clang, creating full_compiler.sh.
 
 ---
 
 ## 2. What Was Taken, Changed, and Why
 
 - **What was taken as generated**:
-  - [TODO: List files, functions, tests or boilerplate taken directly from AI output]
+  - The automated test runner logic in tests/run_tests.py that compiles tests/io/*.txt programs to native binaries (llc -filetype=obj -relocation-model=pic + clang -fPIE) and verifies sessions against .in and .expected files.
+  - The baseline input and expected files for the three sessions: points.sheet, points.none, and points.all.
+  - The full_compiler.sh helper script for one-step compilation into an executable binary.
+  - The template for the reflection.md file
 - **What I changed / adapted and why**:
-  - [TODO: List modifications, bug fixes, custom refactoring, manual checks]
+  - Scaffolded the initial tests/io/ sturcture from the practice specification.
+  - Manually tested the compiled ./points binary interactively from the terminal (testing edge cases like mismatched distances and zero match exits) to verify real terminal behavior versus redirected stdin (<).
+  - Checked the object file symbols with nm points.o to verify U printf and U scanf resolution.
+  - Wrote the entire reflection.md text personally in my own words
 
 ---
 
 ## 3. What I Understood (In My Own Words)
 
-[TODO: Briefly describe in your own words what you learned/understood during Practice 10 regarding native compilation, object files/linking, I/O sessions, or C FFI]
+Earlier we only executed our code with the lli interpreter, but in this practice I saw how real binaries are built and understood the we need to not only compile IR to maching code bu also link it with libc fucntions. 
+I also learned how '<' works with user input. Actuallym it is not echoed back to the creen, which is why .expected needs to contain only prompts and results, all printed by program. 
 
 ---
 
@@ -568,5 +575,48 @@ exit n
 ```
 
 Коли $n = 0$, інструкція `exit n` завершує програму і друкує `Program exit with result 0`. Якщо додати туди якийсь додатковий `print`, автогрейдер завалить сесію `points.none`.
+
+---
+
+User:
+ну ок, тоді закоміть будь ласка
+
+Model:
+Закомітив!
+
+* **Хеш коміту:** `c8c39bd`
+* **Повідомлення:** `feat(practice-10): implement Task 1 (points binary, I/O test runner, and sessions)`
+* **Включено у коміт:**
+  - `tests/io/points.txt` та всі 3 сесії (`sheet`, `none`, `all`);
+  - оновлений `tests/run_tests.py` з підтримкою збірки та прогону I/O сесій;
+  - `full_compiler.sh` (допоміжний скрипт збірки бінарника);
+  - `.gitignore` (додано виконувані бінарники);
+  - оновлений `ai_usage.txt` (також здубльовано у `.agents/w10-files/ai_usage.txt`).
+
+Робоче дерево чисте (`nothing to commit, working tree clean`).
+
+---
+
+User:
+окі. тепер таск 2 лишився тільки правильно? там релексія, створи мені файл та накидай будь ласк атемплейт всередині нього
+
+Model:
+Створив файл [reflection.md](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/reflection.md) у корені репозиторію з темплейтом під усі 5 пунктів.
+
+### Короткі підказки перед заповненням:
+1. **Обсяг**: суворо **300–600 слів** (все, що більше 600 слів, викладач не читає).
+2. **Пишеться самостійно без AI** (пряма вимога завдання).
+3. **Оцінювання**: кожен пункт дає по **0.3 бала** (разом 1.5 бала).
+4. **Конкретика**: обов'язково посилайтеся на реальні речі з репозиторію, які викладач може перевірити. Наприклад:
+   - Файли компілятора: `compiler.py`, `optimizer.py`, `lexer.py`.
+   - Методи AST / візиторів: `visit_member_call`, `_check_target_mut`, `emit_print_struct`, `UseCounter`, `Pruner`.
+   - Конкретні тести: `lambda_mut_counter_example.txt`, `points.txt`, `opt/call_kept.txt`.
+   - Специфічні механізми: аналіз ефектів (чисті функції), розцукрювання лямбд у структури із захопленням полів, фіксовані точки у видаленні мертвого коду, узгодження ABI типів тощо.
+
+---
+
+> ℹ️ **Щодо завдань:**  
+> Так, для обов'язкових 3 балів лишився тільки цей Task 2 (`reflection.md`).  
+> Додатково є ще **Additional Task на +1 бал** (`extern fn` для FFI з C) — якщо вирішите його робити після рефлексії, дайте знати!
 
 ---
