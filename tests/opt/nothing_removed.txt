@@ -1,0 +1,5 @@
+i32 a{3}
+i32 b{a + 4}
+print(b)
+exit b
+

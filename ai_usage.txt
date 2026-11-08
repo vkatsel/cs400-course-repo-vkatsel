@@ -1,463 +1,622 @@
-# AI Usage Log - CS400
+# AI Usage Disclosure — Practice 10 (`points` binary, I/O sessions, and FFI)
 
-## Practice 8
+---
 
-<!-- session: 4bc60596-2b4f-484e-ad5e-e277c1264a05 -->
+## 1. Tools Used
+
+- **Tool Name**: Google Antigravity CLI (Agentic Coding Assistant)
+- **Model**: Gemini 3.8 Flash (Medium), Gemini 4 Argon
+- **Usage Scope**: ssisting with Practice 10 Task 1: setting up I/O sessions (sheet, none, all), extending the automated test runner tests/run_tests.py to compile and execute native binaries via llc and clang, creating full_compiler.sh.
+
+---
+
+## 2. What Was Taken, Changed, and Why
+
+- **What was taken as generated**:
+  - The automated test runner logic in tests/run_tests.py that compiles tests/io/*.txt programs to native binaries (llc -filetype=obj -relocation-model=pic + clang -fPIE) and verifies sessions against .in and .expected files.
+  - The baseline input and expected files for the three sessions: points.sheet, points.none, and points.all.
+  - The full_compiler.sh helper script for one-step compilation into an executable binary.
+  - The template for the reflection.md file
+- **What I changed / adapted and why**:
+  - Scaffolded the initial tests/io/ sturcture from the practice specification.
+  - Manually tested the compiled ./points binary interactively from the terminal (testing edge cases like mismatched distances and zero match exits) to verify real terminal behavior versus redirected stdin (<).
+  - Checked the object file symbols with nm points.o to verify U printf and U scanf resolution.
+  - Wrote the entire reflection.md text personally in my own words
+
+---
+
+## 3. What I Understood (In My Own Words)
+
+Earlier we only executed our code with the lli interpreter, but in this practice I saw how real binaries are built and understood the we need to not only compile IR to maching code bu also link it with libc fucntions. 
+I also learned how '<' works with user input. Actuallym it is not echoed back to the creen, which is why .expected needs to contain only prompts and results, all printed by program. 
+
+---
+
+## 4. Full Prompts and Chat Transcripts
+
+## Practice 10
+
+<!-- session: b48caf7e-25d4-45ab-be8a-90c202e75430 -->
 User:
-/plan привіт, працюємо над @[.agents/w8-files/w08-practice.md] . дай будь ласка детальне оверв'ю того, що потрібно зробити, в чому суть практики та як це можна імплементувати. також, розпиши, як воно поєднається з тим що ми вже маємо і як воно працює на різних рівнях, як це має парситися, лексистися, рухатися далі
+прів, працює над @[.agents/w10-files/CS400_Practice_10.md] , дай будь ласка оверв'ю що потрібно зробити
 
 Model:
-Ось детальний огляд [w08-practice.md](file:///home/ubuntu/cs400/.agents/w8-files/w08-practice.md): в чому суть практики, як воно працює на кожному рівні компілятора та як поєднується з поточною базою коду. Повний технічний план змін збережено в артефакті [implementation_plan.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/4bc60596-2b4f-484e-ad5e-e277c1264a05/implementation_plan.md).
+Ось структурований огляд того, що потрібно зробити для **Practice 10**:
 
 ---
 
-### 1. В чому головна суть Практики 8?
+### 🎯 Загальна мета практики
+Показати, що компілятор здатний збирати **повноцінний нативний бінарник**, який взаємодіє з користувачем через термінал (введення/виведення, структуры, методи, функції, розгалуження), а також підбити підсумки семестру у рефлексії.
 
-Ключова ідея цієї практики — **Desugaring (розцукрювання / переписування AST на етапі семантичного аналізу)**.
-Ми додаємо дві фічі високого рівня:
-1. **Callable Objects (Об'єкти-функтори, Task 1 — 1 бал)**: будь-яку змінну або поле структури, тип якої має метод `call`, можна викликати як функцію: `triple(14)` $\rightarrow$ `triple.call(14)`, а `s.scale(7)` $\rightarrow$ `s.scale.call(7)`.
-2. **Lambdas & Closures (Лямбда-функції із захопленням змінних, Task 2 — 1.5 бала + Additional Task `mut` captures — +1 бал)**: функції, які оголошуються прямо всередині коду як звичайний `statement` і захоплюють копії потрібних змінних у квадратних дужках `[k]` або `[mut n]`.
-
-**Чому це «синтаксичний цукор»?**
-Тому що в Практиці 7 ми **вже** реалізували структури, поля (`const` та `mut`), методи структур (`MemberFnNode` з неявним першим параметром `this`), виклики методів (`MemberCallNode`) та правило поширення мутацій (`is_mutating`).
-- **Callable object** — це просто перетворення виклику `obj(args)` на виклик методу `obj.call(args)`.
-- **Лямбда** `fn add_k := [k](i32 y) -> i32 { ... }` — це просто автоматично згенерована компілятором структура `lambda.add_k` з полем `k`, методом `call(i32 y) -> i32` та оголошенням локальної змінної `lambda.add_k add_k{k}` у місці, де стояла лямбда. Як тільки компілятор перетворив лямбду на структуру і змінну `add_k`, виклик `add_k(5)` автоматично стає викликом callable-об'єкта з Task 1!
+Дедлайн: **п'ятниця, 13 листопада, 23:59**.
 
 ---
 
-### 2. Як це рухається по конвеєру компілятора (рівень за рівнем)
+### 📊 Оцінювання (3.0 бали основні + 1.0 додатковий)
 
-#### Рівень 1: Лексер ([lexer.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py))
-- У поточному лексері є `(` та `)`, `{` та `}`, але ще немає квадратних дужок `[` та `]`.
-- У [`lex`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/lexer.py#L104-L293) додаємо обробку байтів `91` (`[`) та `93` (`]`) як токенів `Token("operator", "[", line, col)` і `Token("operator", "]", line, col)`.
-- Усі ключові слова (`fn`, `mut`, `exit` тощо) вже лекситься як треба.
-
-#### Рівень 2: Парсер ([`Parser`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L429-L1395)) і первинне дерево `--ast`
-На етапі парсингу парсер **не знає типів і не знає, чи ім'я є змінною, чи функцією**:
-1. **Виклики (`triple(14)` та `s.scale(7)`)**:
-   - `triple(14)` парситься у [`parse_factor`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L488-L613) абсолютно так само, як і виклик звичайної функції — у [`CallNode`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L104-L119).
-   - `s.scale(7)` вже зараз парситься у [`MemberCallNode`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L122-L139) (`target=VarNode("s")`, `func_name="scale"`).
-   - Тому вивід `--ast` для викликів залишається незмінним.
-2. **Лямбди (`fn name := [captures](params) -> ret_type`)**:
-   - Парсер розрізняє звичайну функцію та лямбду за токеном після `:=`:
-     - `fn name := (` — звичайна функція або метод структури (дозволені тільки у секції `fn_defs` на початку програми або всередині `struct`). Якщо така конструкція трапляється серед `statement` або всередині блоку — це помилка парсингу.
-     - `fn name := [` — це `LambdaNode` (дозволена всюди, де дозволений `statement`: на top-level серед statements, у тілі функцій, методів, `if`, `while` та всередині іншої лямбди). Якщо `[` стоїть у методі структури — це помилка.
-   - У списку захоплень `[...]` парсер зчитує елементи вигляду `ident` або `mut ident` у список `CaptureDef`.
-
-#### Рівень 3: Семантичний аналіз і Переписування ([`SemanticChecker`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L1439-L2265)) та `--ast-checked`
-Саме тут відбувається вся магія Практики 8:
-
-1. **Переписування викликів (Task 1)**:
-   - У [`visit_call`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L1950-L1995) для `name(args)` перевіряємо:
-     - Чи є `name` видимою змінною (локальна змінна/параметр у `self.scopes` або поле поточної структури/лямбди у `self.current_struct`)?
-     - Чи є `name` функцією (метод поточної структури або глобальна функція у `self.functions`)?
-     - **Конфлікт**: якщо `name` одночасно і видима змінна, і функція — видаємо помилку на місці виклику: `'twice' is both a variable and a function: rename one of them`.
-     - **Якщо це змінна**: перевіряємо, що її тип — структура, яка має метод `call`. Якщо це `i32`/`i64`/`bool` або структура без `call` — видаємо відповідну помилку (`'n' is not callable: it is i32` або `'p' is not callable: Point has no member function 'call'`). Якщо метод `call` є — перетворюємо виклик на виклик методу `call` для об'єкта `name` (у `--ast-checked` він виводиться як `CallableCall <name>`).
-   - У [`visit_member_call`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L1996-L2037) для `obj.name(args)`:
-     - Якщо `name` — це **поле** структури `obj` (наприклад, `s.scale(7)`), то переписуємо `target` на доступ до поля `FieldAccessNode(obj, "scale")`, а ім'я методу ставимо `"call"`, і перевіряємо його за тими ж правилами callable-об'єкта.
-
-2. **Перевірка і переписування лямбд (Task 2 + Additional Task)**:
-   Коли `SemanticChecker` обходить `LambdaNode` (наприклад, `fn add_k := [k](i32 y) -> i32`):
-   - **Крок 1 (Перевірка захоплень у зовнішній області видимості)**:
-     - Кожне захоплення `c` має бути видимою змінною у точці оголошення лямбди (інакше `cannot capture 'k': no variable 'k' is visible here`).
-     - Перевіряємо відсутність дублікатів у `[...]` (`'k' is captured twice`) та те, що жоден параметр не має такого ж імені, як захоплення.
-   - **Крок 2 (Створення структури `lambda.<name>` та методу `call`)**:
-     - Створюємо синтетичну структуру `lambda.add_k` (оскільки в ідентифікаторах мови не може бути крапки, користувач ніколи не зможе послатися на цей тип напряму або створити колізію).
-     - Для кожного захоплення `c` додаємо поле у `lambda.add_k` з типом захопленої змінної та прапорцем `mutable = c.mutable` (`const` для `[k]`, `mut` для `[mut k]`).
-     - Додаємо в структуру метод `call` з параметрами, типом повернення та тілом лямбди.
-   - **Крок 3 (Перевірка тіла `call` в ізольованій області видимості)**:
-     - Тіло лямбди перевіряється точно як метод структури `lambda.add_k`: воно бачить лише свої параметри, свої локальні змінні, поля своєї структури `lambda.add_k` (тобто захоплення!) та глобальні функції.
-     - Якщо в тілі використовується змінна із зовнішньої області видимості, якої немає у списку `[...]`, видаємо помилку: `'k' is not captured by lambda 'add_k': add it to the capture list, [k]`.
-     - Якщо в тілі робиться присвоєння `k := ...` у `const`-захоплення, видаємо: `cannot assign to 'k': the capture 'k' is const, write [mut k]`.
-     - Якщо в тілі змінюється `mut`-захоплення або викликається мутуючий `call` на `mut`-захопленні (наприклад, `[mut next]`), то метод `call` цієї лямбди автоматично стає `is_mutating = True`!
-   - **Крок 4 (Створення оголошення змінної-замикання `DeclNode`)**:
-     - Після перевірки тіла (тому лямбда не бачить саму себе і не може викликати себе рекурсивно) створюємо `DeclNode` для змінної `add_k` типу `lambda.add_k`, ініціалізованої списком `[VarNode(c.name) for c in captures]`.
-     - Якщо хоча б одне захоплення має `mut`, сама змінна `add_k` оголошується як `mut`, щоб виклик `next()` на місці оголошення був дозволений правилом мутацій.
-   - **Крок 5 (Заборона використання лямбди як звичайного значення)**:
-     - Оскільки тип `lambda.<name>` не має імені в мові, будь-яка спроба передати лямбду як аргумент функції (`sq(times)`), повернути з `exit`, присвоїти, використати в ініціалізації іншої змінної, надрукувати у `print(add_k)` або звернутися до її поля через крапку ззовні (`add_k.k`) блокується у `SemanticChecker` з відповідним повідомленням про помилку.
-
-#### Рівень 4: Кодогенерація LLVM IR ([`CodeGenVisitor`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2267-L2915))
-Найприємніше те, що завдяки такому переписуванню [`CodeGenVisitor`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2267-L2915) майже не потребує змін:
-- Додані у `program.struct_defs` структури `lambda.<name>` автоматично генерують LLVM-тип `%"lambda.add_k" = type {i32}` та функцію `define i32 @"lambda.add_k_call"(%"lambda.add_k"* %"this", i32 %"y")`.
-- Коли `CodeGenVisitor` доходить до `LambdaNode` у блоці, він просто викликає `visit_decl` для згенерованого `DeclNode`: робить `alloca %"lambda.add_k"` і копіює поточні значення захоплених змінних у поля структури через `gep` + `store` (тому зміна змінної пізніше не впливає на створену лямбду, а в циклі `while` на кожній ітерації в поля записуються актуальні значення).
-- Виклик `add_k(5)` або `triple(14)` генерується існуючим [`visit_member_call`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2750-L2813) як:
-  ```llvm
-  %"call_call" = call i32 @"lambda.add_k_call"(%"lambda.add_k"* %"add_k", i32 5)
-  ```
+| Частина | Бали | Що оцінюється |
+|---|---|---|
+| **Task 1: Бінарник `points`** | **1.0** | Робота програми з файлу і руками в терміналі; універсальний друк полів структури (`gep` + `load` + `printf` по таблиці полів). |
+| **Task 1: Тести `tests/io`** | **0.5** | Три сесії (`sheet`, `none`, `all`) у тестовому раннері; проходження всіх тестів з прапорцем `--remove-unused` і без нього. |
+| **Task 2: Рефлексія** | **1.5** | Файл `reflection.md` (300–600 слів), 5 фіксованих пунктів із конкретними посиланнями на код. |
+| **Additional Task (FFI)** | **+1.0** | Підтримка `extern fn` для виклику C-функцій (0.5 за енд-ту-енд роботу, 0.5 за семантичні перевірки / 9 помилок). |
 
 ---
 
-Перегляньте, будь ласка, план у [implementation_plan.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/4bc60596-2b4f-484e-ad5e-e277c1264a05/implementation_plan.md). Якщо все зрозуміло та підходить — підтвердьте план, і я перейду до реалізації всіх частин (включно з додатковим завданням на `+1` бал) та написання тестів!
+### 1. Task 1: Програма `points` та I/O сесії (1.5 бала)
 
----
+#### 1.1. Що робить програма
+Програма зчитує 3 точки (`Point { i32 x, i32 y }`), обчислює квадрат відстані кожної до початку координат через метод `d2()`, зчитує порогове число `d`, виводить усі точки, у яких `d2() == d`, і завершується кодом виходу (кількість знайдених точок):
+* Файл зберігається як `tests/io/points.txt`.
+* Важлива вимога: `print(p)` не повинен хардкодити тип `Point` — друк має проходити по таблиці полів структури універсально.
 
-User:
-/plan а можеш будь ласка цей план розписати українською та більш стюдент френдлі мовою, щоб я все зрозумів
-
-Model:
-Я переписав план у [implementation_plan.md](file:///home/ubuntu/snap/antigravity-cli/common/.gemini/antigravity-cli/brain/4bc60596-2b4f-484e-ad5e-e277c1264a05/implementation_plan.md) українською мовою у простому, покроковому форматі з наочним прикладом того, як компілятор «під капотом» перетворює лямбду та виклики об'єктів на звичайні структури й методи з Практики 7.
-
-Подивіться, будь ласка, оновлений план. Якщо виникнуть питання щодо будь-якого кроку — з радістю поясню детальніше, або якщо все зрозуміло — можемо переходити до реалізації!
-
----
-
-User:
-[implementation_plan.md]
-L167: а якшо під лямбдою теж є глобальні функції, таке ж може бути?
-L199: а нам до речі не варто би були обробити ті випадки якшо .call змінює якусь немутабельну змінну? чи ми тільки з копіями працюємо? і те саме щодо лямбд
-
-Model:
-Дуже влучні питання! Розберімо обидва детально:
-
----
-
-### 1. Щодо L167: «А якщо під лямбдою теж є глобальні функції, таке ж може бути?»
-
-За граматикою нашої мови (ще з Практики 5–7) програма має суворий порядок секцій:
-```ebnf
-program ::= { struct_def } { fn_def } { statement } exit ;
+#### 1.2. Збірка нативного бінарника
+Замість `lli` збирається справжній ELF-бінарник:
+```bash
+python3 compiler.py tests/io/points.txt points.ll
+llc -filetype=obj -relocation-model=pic points.ll -o points.o
+clang -fPIE points.o -o points
+./points < tests/io/points.sheet.in
 ```
-Тобто:
-1. Спочатку йдуть **тільки структури** (`struct_def`).
-2. Потім — **тільки глобальні функції** (`fn_def`, без `[...]`).
-3. Потім — **інструкції (`statement`)** (змінні, `if`, `while`, `print`, а тепер ще й **`lambda`**) і в кінці `exit`.
+*(У бінарнику `printf` і `scanf` мають бути зовнішніми символами `U printf`, `U scanf`, які лінкуються з `libc`)*.
 
-Оскільки **лямбда за правилами є саме інструкцією (`statement`)** (бо зазвичай перед нею вже оголошені змінні, які вона захоплює, наприклад `i32 mut k{10}`), то поява першої ж лямбди означає, що ми вже перебуваємо в секції `{ statement }`.
+#### 1.3. Три тестові сесії (`tests/io/`)
+При перенаправленні вводу `./points < file.in` набрані користувачем рядки **не** дублюються у вивід терміналу. Тому в `.expected` записуються лише промпти та вивід програми:
+1. `points.sheet` — стандартний сценарій (3 точки `(3 4)`, `(1 1)`, `(0 5)`, відстань `25`, вихідний код 2).
+2. `points.none` — жодна точка не співпадає (ті самі точки, відстань `7`, вихідний код 0).
+3. `points.all` — від'ємні координати (`-3 4`, `4 -3`, `5 0`, відстань `25`, вихідний код 3).
 
-- Якщо під лямбдою йде **інша лямбда** (`fn other := [...]`) — це ще один `statement`, і це **дозволено**.
-- А якщо під лямбдою (або під будь-яким іншим `statement`, типу `i32 k{10}`) хтось напише **глобальну функцію** без квадратних дужок (`fn global_fn := (...)`) — це порушення структури програми, і парсер у [`parse_statement`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L1337-L1338) видасть помилку `function declaration after statement` (на це навіть є старий тест у `tests/err/`).
-
----
-
-### 2. Щодо L199: «Чи треба обробляти випадки, якщо `.call` змінює немутабельну змінну? Чи ми тільки з копіями працюємо? І те саме щодо лямбд»
-
-**Так, обов'язково треба обробляти!** Тут працюють **два рівні захисту мутабельності**, і обидва ми перевіряємо:
-
-#### Ситуація А: Зміна всередині самого `.call` (або тіла лямбди)
-1. **Звичайні зовнішні змінні**:
-   До зовнішніх змінних напряму ні метод `.call`, ні лямбда доступу не мають. Лямбда завжди бере **копію** змінної у своє поле під час оголошення (`[k]` або `[mut n]`), тому оригінальна зовнішня змінна ніколи не змінюється.
-2. **Поля самої структури або захоплення лямбди**:
-   - Якщо у звичайній структурі поле оголошене без `mut` (`i32 k`), або у лямбді змінна захоплена без `mut` (`[k]`), то це поле є **`const`**.
-   - Якщо всередині `.call` або тіла лямбди спробувати написати `k := k + 1`, компілятор видасть помилку:
-     - для звичайної структури: `cannot assign to const field 'k' inside member function`
-     - для лямбди: `cannot assign to 'k': the capture 'k' is const, write [mut k]`
-
-#### Ситуація Б: Метод `.call` змінює `mut`-поле, але сам об'єкт (або захоплена лямбда) є `const`!
-Уявімо, що всередині структури чи лямбди поле **дозволено** змінювати (`i32 mut n` у `Counter`, або `[mut n]` у лямбді `next`). Тоді сам метод `call` стає **мутуючим (`is_mutating = True`)** — бо кожен виклик змінює стан самого об'єкта.
-
-А тепер подивімось, як викликають цей об'єкт:
-1. **Для об'єкта структури (Task 1)**:
-   ```txt
-   Counter c{0}      // <-- змінна 'c' створена БЕЗ 'mut' (вона const!)
-   i32 a{c()}        // <-- ПОМИЛКА!
-   ```
-   Хоча поле `n` всередині `Counter` має `mut`, сам об'єкт `c` є `const`. Виклик `c()` намагається змінити `c.n`, тому ми **блокуємо** такий виклик з помилкою:
-   `cannot call 'c': its 'call' changes it, and it is not mut`
-   (Так само, якщо викликати `s.c()`, де або `s` не є `mut`, або поле `c` всередині `s` не є `mut`).
-
-2. **Для лямбд (Additional Task)**:
-   - Коли оголошується `fn next := [mut n]() -> i32`, компілятор знає, що в неї є `mut`-захоплення, і автоматично робить саму змінну `next` мутабельною (`lambda.next mut next{n}`). Тому просто викликати `next()` одразу після оголошення — можна.
-   - **АЛЕ** якщо інша лямбда `twice` захоплює `next` **без `mut`**:
-     ```txt
-     fn twice := [next]() -> i32   // <-- захопили копію 'next' як const!
-     {
-         i32 a{next()}             // <-- ПОМИЛКА!
-         exit a
-     }
-     ```
-     Оскільки `twice` захопила `next` без `mut`, її власна копія об'єкта `next` є **`const`-полем** структури `lambda.twice`. А метод `call` у `next` є мутуючим (`is_mutating = True`)! Тому виклик `next()` всередині `twice` намагається змінити `const`-поле, і компілятор видасть помилку:
-     `cannot call 'next': its 'call' changes it, and it is not mut` (щоб запрацювало, треба написати `[mut next]`).
+#### 1.4. Оновлення тест-раннера
+Скрипт тестування (`tests/run_tests.py`) має підтримувати тести з директорії `tests/io/`: збирати бінарник через `llc` + `clang`, подавати `*.in` і порівнювати з `*.expected`. Усі тести (і старі, і нові) мають бути зеленими як з `--remove-unused`, так і без нього.
 
 ---
 
-Чи тепер все склалося в цілісну картину? Якщо план підходить — дайте знати, і починаємо імплементацію!
+### 2. Task 2: Рефлексія `reflection.md` (1.5 бала)
+
+Файл `reflection.md` у корені репозиторію:
+* **Обсяг**: суворо **300–600 слів** (текст понад 600 слів не перевірятиметься).
+* **AI заборонено**: текст має бути написаний виключно самостійно.
+* **5 обов'язкових пунктів**:
+  1. Які фічі чи ідіоми з курсу ви вважаєте найбільш корисними?
+  2. Які фічі були розкриті недостатньо?
+  3. Наведіть щонайменше 3 приклади зі сфери мов і компіляторів, які найбільше здивували.
+  4. Які концепції чи підходи досі залишаються не зовсім зрозумілими?
+  5. Ідеї та пропозиції щодо змісту курсу.
+* **Критична вимога**: конкретика! Не просто враження, а посилання на конкретні файли, методи компілятора (`semantics.py`, правила генерації LLVM IR, оптимізації), конкретні тести тощо.
 
 ---
 
-User:
-гуд можна в цілому почати з таски 1, і одразу ж написати на нього тести, тобто робити таск 3 послідовно
+### 3. Додаткове завдання: Виклики C через `extern fn` (+1.0 бал)
 
-Model:
-**Task 1 (Callable Objects)** та першу частину **Task 3 (тести для Task 1)** повністю реалізовано та перевірено (`112 passed, 0 failed`):
-
-### Що зроблено:
-1. **Вузли AST та `--ast-checked`** у [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py) та [run.sh](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/run.sh):
-   - Додано підтримку перезапису викликів у [`CallNode`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L104-L124) та [`MemberCallNode`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L127-L150) з виводом `CallableCall` у `--ast-checked` (тоді як `--ast` зберігає сире дерево розбору).
-2. **Семантичні перевірки та перезапис** ([`visit_call`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L1964-L2062), [`visit_member_call`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2064-L2164), [`_check_target_mut`](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py#L2192-L2282)):
-   - Розпізнавання виклику локальних змінних, параметрів і полів поточної структури як виклику `.call(...)`.
-   - Підтримка виклику callable-полів після крапки (`s.scale(7)` $\rightarrow$ `s.scale.call(7)`).
-   - Перевірка всіх помилок із умови: конфлікт змінної та функції з однаковим ім'ям при виклику, виклик `i32`/`i64`/`bool`, виклик структури без методу `call`, неправильна кількість/типи аргументів (з назвою об'єкта, а не `call`), виклик мутуючого `call` на `const`-об'єкті або через `const`-поле.
-3. **Тести для Task 1**:
-   - У `tests/ok/`: [callable_task1_example.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/callable_task1_example.txt), [callable_field_chain.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/callable_field_chain.txt).
-   - У `tests/err/`: [callable_struct_no_call.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_struct_no_call.txt), [callable_on_i32.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_on_i32.txt), [callable_var_and_fn_conflict.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_var_and_fn_conflict.txt), [callable_wrong_args.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_wrong_args.txt), [callable_mutate_const.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_mutate_const.txt), [callable_mutate_const_field.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_mutate_const_field.txt).
-
-Переходимо до **Task 2 (Lambdas)** та **Additional Task (`[mut x]` captures)** разом із їхніми тестами?
-
----
-
-User:
-гуд, а крайні випадки переввірено?
-
-Model:
-Усі крайні випадки для **Task 1** перевірено та покрито тестами (`115 passed, 0 failed`):
-- [callable_param_and_shadow.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/callable_param_and_shadow.txt) — передача callable-структури як параметра функції та одночасне існування змінної й функції з однаковим ім'ям без виклику;
-- [callable_wrong_arg_type.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_wrong_arg_type.txt) — неправильний тип аргументу при виклику об'єкта (повідомлення вказує на об'єкт `'triple'`, а не `'call'`);
-- [callable_field_no_call.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/callable_field_no_call.txt) — виклик поля структури після крапки (`h.p(5)`), тип якого не має методу `call`.
-
-Переходимо до **Task 2 (Lambdas)** та **Additional Task (`mut` captures)**?
-
----
-
-User:
-чомусь не все занеслось в ai_usage.txt до речі
-
-Model:
-Виправив скрипт [.agents/log_ai_usage.py](file:///home/ubuntu/cs400/.agents/log_ai_usage.py) та синхронізував обидва файли ([ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt) і [.agents/w8-files/ai_usage.txt](file:///home/ubuntu/cs400/.agents/w8-files/ai_usage.txt)):
-
-- **У чому була причина**: коли під час одного ходу викликалися інструменти (або фонові процеси), хук `PostInvocation` спрацьовував уже на першому проміжному повідомленні (перед викликом інструмента) і зберігав індекс `USER_INPUT` у `.log_state.json`. Через перевірку `if state.get(session_id) == step_idx: return` фінальна відповідь в кінці ходу ігнорувалася.
-- **Що виправлено**: тепер `log_ai_usage.py` на кожному виклику збирає всі ходи сесії з транскрипту, бере фінальну відповідь моделі для кожного ходу (без проміжних `tool_calls`) і оновлює секцію сесії в `ai_usage.txt`. Тепер усі попередні й майбутні ходи записуються повністю.
-
-Можемо переходити до **Task 2 (Lambdas)** та **Additional Task (`mut` captures)**?
-
----
-
-User:
-тоді в цілому можеш комітити те, що є, одразу переходити до таски 2, і одразу ж покривай цю частину тестами (таск 3). потім про додатковий поговоримо
-
-Model:
-Запустив повний набір тестів (`./run.sh test`) і перевірку `--ast-checked` для Task 2 — зачекаємо кілька секунд на завершення.
-
----
-
-User:
-окей, у мене одразу питання до додаткового таску. шо в цьому контексті означає сaptures, і як очікується шо це працюватиме
-
-Model:
-### Що таке captures (захоплення) простими словами?
-
-Коли ми створюємо лямбду, вона є **локальною функцією**, але функція не має автоматичного доступу до змінних ззовні. 
-Щоб лямбда могла використати зовнішню змінну (наприклад, `k`), ми записуємо її в квадратні дужки: `[k]`.
-
-Це називається **захопленням за значенням (capture by copy)**:
-1. У момент оголошення лямбди створюється **копія** значення змінної `k`.
-2. Компілятор під капотом перетворює лямбду на звичайну структуру:
-   ```
-   struct lambda.add_k {
-       k: i32
-   }
-   ```
-3. Тобто кожне захоплення — це **поле структури**, в яке при ініціалізації скопіювали значення зовнішньої змінної.
-
----
-
-### Чим відрізняється звичайне захоплення (Task 2) від `mut` захоплення (Додатковий таск)?
-
-#### 1. У Task 2 (константне захоплення): `[k]`
-* Поле структури створюється як **`const`**:
-  ```
-  struct lambda.add_k {
-      k: i32 const
-  }
-  ```
-* Всередині тіла лямбди змінна `k` є константою. Спроба написати `k := k + 1` викликає помилку:
-  `cannot assign to 'k': the capture 'k' is const, write [mut k]`
-* Сама змінна-лямбда (`add_k`) теж створюється як `const`.
-
----
-
-#### 2. У Додатковому таску: `[mut k]`
-* Поле структури стає **мутабельним (`mut`)**:
-  ```
-  struct lambda.next {
-      n: i32 mut
-  }
-  ```
-* **Що це означає для поведінки програми:**
-  1. **Власна незалежна копія:**
-     Лямбда копіює значення зовнішньої змінної `n` у своє поле. Оригінальна зовнішня `n` **ніколи не змінюється**, навіть якщо зовнішня `n` була константною! Лямбда змінює лише *свою власну внутрішню копію*.
-  2. **Лямбда як лічильник/стан (stateful closure):**
-     Якщо лямбда змінює `mut` захоплення (наприклад, `n := n + 1`), вона зберігає цей новий стан між викликами:
-     ```
-     i32 n{0}
-     fn next := [mut n]() -> i32 {
-         n := n + 1
-         exit n
-     }
-     print(next())  // виведе 1
-     print(next())  // виведе 2
-     print(n)       // виведе 0! (оригінальна n не змінилася)
-     ```
-  3. **Правило мутабельності виклику:**
-     Оскільки `call` усередині змінює своє поле `n`, функція `call` стає **мутуючою (mutating member function)**.
-     - Тому сама змінна лямбди повинна бути оголошена як `mut` (якщо хоча б одне захоплення є `mut`, змінна лямбди автоматично стає `mut`):
-       ```
-       Decl next lambda.next mut
-       ```
-     - Якщо ми передаємо цю лямбду іншій лямбді або структурі як константу (`[next]`), то викликати `next()` всередині буде заборонено перевіркою мутабельності:
-       `cannot call 'next': its 'call' changes it, and it is not mut`
-     - Щоб дозволити виклик, друга лямда має захопити її теж як `[mut next]`:
-       тоді вона зробить копію стану лічильника і буде змінювати вже свою копію.
-
----
-
-### Підсумок
-Захоплення (`captures`) — це спосіб «взяти із собою» копії зовнішніх змінних всередину лямбди (як поля структури).
-- `[x]` — тільки для читання (const-поле).
-- `[mut x]` — дає лямбді свій власний змінюваний стан (mut-поле), зберігаючи інкапсуляцію та не чіпаючи оригінальну змінну.
-
----
-
-User:
-окей, а як імплементувати це захоплення?
-
-Model:
-Імплементувати `[mut x]` насправді дуже просто і природно, тому що майже весь фундамент ми вже заклали в архітектуру під час Task 1 і Task 2!
-
-Ось як це працює по кроках:
-
----
-
-### 1. Парсер (`parse_lambda`)
-Зараз у capture list ми парсимо просто ідентифікатор:
-```python
-# Було:
-captures.append(CaptureDef(cap_tok.text, False, cap_tok.line, cap_tok.col))
-```
-Тепер перед назвою змінної може стояти слово `mut`:
-```python
-# Стане:
-is_mut = False
-if self.peek() is not None and self.peek().text == "mut":
-    self.eat()
-    is_mut = True
-...
-captures.append(CaptureDef(cap_tok.text, is_mut, cap_tok.line, cap_tok.col))
-```
-Також у граматиці `grammar.ebnf`:
-```ebnf
-capture ::= [ "mut" ] ident ;
-```
-
----
-
-### 2. Створення структури лямбди (`visit_lambda`)
-Коли ми синтезуємо поля для структури `lambda.<name>`:
-- Якщо `cap.mutable == True`, поле структури створюється як `mut`:
-  ```python
-  FieldDef(cap.name, cap_type, mutable=cap.mutable, cap.line, cap.col)
-  ```
-- Оскільки це звичайне `mut` поле структури, присвоєння `n := n + 1` усередині тіла лямбди тепер автоматично дозволено!
-- Присвоєння до цього поля автоматично позначає метод `call` як **мутуючий (`is_mutating = True`)** — це ми вже маємо в `visit_assign`:
-  ```python
-  if self.current_member_fn is not None:
-      self.current_member_fn.is_mutating = True
-  ```
-
----
-
-### 3. Оголошення змінної-закриття (`DeclNode`)
-За правилом практики:
-> *The closure variable is `mut` when one of its captures is `mut`, so a call like `next()` works at the place of the declaration.*
-
-Ми вже написали це в Task 2:
-```python
-is_decl_mut = any(cap.mutable for cap in node.captures)
-decl_node = DeclNode(..., mutable=is_decl_mut, ...)
-```
-Тобто `next` автоматично стає мутабельною змінною `Decl next lambda.next mut`.
-
----
-
-### 4. Перевірка мутабельності при виклику (Mutation Check)
-Оскільки `call` є мутуючим методом:
-- На місці оголошення `next` є `mut`, тому виклик `next()` дозволений.
-- Якщо інша лямбда захоплює її без `mut`: `[next]`, то `next` стає `const` полем нової лямбди. Тоді наш перевірник `_check_target_mut` видасть рівно ту помилку, яку вимагає практика:
-  ```
-  cannot call 'next': its 'call' changes it, and it is not mut
-  ```
-- А якщо вона захоплює її як `[mut next]`, то поле мутабельне — і виклик дозволений!
-
----
-
-### 5. Генерація коду (LLVM IR)
-Тут **взагалі нічого нового писати не потрібно**:
-- При створенні `next` на стеку виділяється структура `%"lambda.next"`.
-- При виклику `next()` першим аргументом (`this`) передається вказівник на цей стек-слот `%"lambda.next"*`.
-- Метод `call` завантажує поле, додає 1 і записує назад у той самий стек-слот через GEP + `store`.
-- А коли інша лямбда робить `[mut next]`, вона копіює поточний стан структури у своє власне поле!
-
----
-
-Бажаєте, щоб ми зараз підключили підтримку `[mut x]` у парсері та граматиці та додали відповідні тести з завдання?
-
----
-
-User:
-тоді давай це також зробимо, тільки закоміть таск 2. також покрий тестами, в @[cs400-course-repo-vkatsel/examples] створи програму, яка буде покривавти все шо сьогодні було зроблено. також додай туди якийсь трікі код, щоб було видно як він працю
-
-Model:
-Оновлюю журнал використання ШІ (`ai_usage.txt`)...
-
----
-
-User:
-а для чого ти самостійно запустив скрипт, воно ж самелогується, і що там по тому саску?
-
-Model:
-Ви абсолютно праві — хук `PostInvocation` логує все автоматично після кожної репліки, тому запускати вручну не було потреби (я скасував той фоновий процес).
-
----
-
-### Що зроблено по тасці:
-
-1. **Task 2 закомічено** в гілку `practice-8`:
-   - Хеш коміту: `94c74f1` (*"feat: implement Practice 8 Task 2 (lambdas and closures) with full test coverage"*).
-
-2. **Додатковий таск (`[mut x]` captures) повністю реалізовано**:
-   - [grammar.ebnf](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/grammar.ebnf): оновлено правило `capture ::= [ "mut" ] ident ;`.
-   - [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py):
-     - `parse_lambda` тепер розпізнає `mut` перед назвою захоплення.
-     - Для таких захоплень генеруються `mut` поля у структурі `lambda.<name>`.
-     - Присвоєння до них у тілі лямбди автоматично робить метод `call` мутуючим.
-     - Сама змінна лямбди стає `mut`, якщо хоча б одне захоплення є `mut`.
-     - Перевірка мутабельності викликів (`_check_target_mut` та фіксована точка) контролює, де таку лямбду дозволено викликати.
-
-3. **Покриття тестами (138/138 тестів пройдено успішно)**:
-   - [lambda_mut_counter_example.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/lambda_mut_counter_example.txt) — еталонна програма з лічильником `next()` та `twice()`, виводить `1`, `2`, `34`, `3`, `Program exit with result 0`.
-   - [lambda_mut_in_loop.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/lambda_mut_in_loop.txt) — зміна `mut` захоплення всередині циклу.
-   - [lambda_two_copies.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/lambda_two_copies.txt) — дві окремі лямбди зі своїми незалежними копіями однієї змінної.
-   - [lambda_const_and_mut.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/ok/lambda_const_and_mut.txt) — поєднання `const` і `mut` захоплень в одному списку `[factor, mut count]`.
-   - [lambda_mut_call_const_capture.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/err/lambda_mut_call_const_capture.txt) — спроба виклику мутуючої лямбди через константне захоплення `[next]`, що дає очікувану помилку:
-     `compilation error: line 9:11: cannot call 'next': its 'call' changes it, and it is not mut`.
-
-4. **Створено демонстраційну програму [examples/practice8_demo.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/examples/practice8_demo.txt)**:
-   Вона демонструє всі нові можливості разом:
-   - **Callable-об'єкти:** структура `Multiplier` з методом `call`, виклики як `mul3(10)` і `mul3.call(10)`, а також callable-поле в іншій структурі `pipe.op(5)`.
-   - **Ізоляція копій у константних лямбдах:** зміна зовнішньої змінної `threshold` після оголошення лямбди не змінює її захоплене значення.
-   - **Трікі-код зі станом (stateful closures):**
-     - Лямбда `counter` має власний змінюваний стан `[mut seed]`.
-     - Її захоплює інша лямбда: `branch_a := [mut counter]`.
-     - `branch_a` робить **окрему копію стану лічильника** і рахує далі на ній (`3`, `4` $\to$ `34`).
-     - Оригінальний `counter` продовжує рахувати зі свого стану (`2` $\to$ `3`).
-     - Зовнішня змінна `seed` залишається недоторканою (`0`).
-
-Виконання демо-програми через `./run.sh examples/practice8_demo.txt` повертає очікувані значення:
+Дозволити оголошувати прототипи зовнішніх C-функцій:
 ```text
-30
-30
-15
-21
-18
-true
-false
-1
-2
-34
-3
-0
-Program exit with result 4
+extern fn abs := (i32 v) -> i32
+extern fn isqrt := (i32 v) -> i32
+```
+* **Семантика та обмеження**:
+  * Оголошуються в секції функцій (після структур, до інструкцій).
+  * Не мають тіла `{ ... }`.
+  * Дозволені типи параметрів та результату: **тільки `i32` та `i64`** (жодних `bool` або структур, оскільки ABI передачі структур/булів відрізняється від C).
+  * Заборонені імена, які вже використовуються компілятором (`printf`, `scanf`, `main`, методи структур).
+* **Генерація коду**:
+  * В IR генерується `declare i32 @"abs"(i32 %".1")`.
+  * При оптимізації (`--remove-unused`): невикористаний `extern fn` видаляється; якщо є виклик — залишається.
+* **Тести**:
+  * `tests/ffi/geometry.txt` + `tests/ffi/geometry.c` (збірка `geometry.o` + `geometry.c` через `clang`).
+  * Програма в `tests/ok`, що викликає функції з `libc` (`abs`, `llabs`).
+  * Щонайменше 9 тестів на помилки в `tests/err/` на всі описані валідації.
+
+---
+
+### 4. Вимоги до здачі
+1. Гілка `practice-10`, pull request у `main` з рев'юером `vovaskochko`.
+2. Обов'язково заповнений `ai_usage.txt` (інструменти, промпти, що взято, що змінено). Відсутній або пустий файл = 0 за практику.
+3. Під час здачі викладачу показується:
+   - Робота бінарника `points` (через редирект `<` та вручну з клавіатури).
+   - Вивід `nm points.o` (з `U printf`, `U scanf`) та `points.ll`.
+   - Зелений прогін тестів з `--remove-unused` та без нього.
+   - `reflection.md`.
+   - *(Якщо робиться додаткове)*: сесія `geometry`, `nm geometry.o` та тести помилок FFI.
+
+---
+
+### З чого краще почати?
+1. Перевірити генерацію універсального друку структур у `compiler.py` на прикладі `Point` (чи немає там захардкоджень).
+2. Створити `tests/io/points.txt` та три сесії (`points.sheet`, `points.none`, `points.all`).
+3. Додати підтримку тестів `tests/io` у `tests/run_tests.py` та переконатися, що бінарник успішно збирається і проходить сесії.
+4. (Опційно) Реалізувати `extern fn` для +1 бала.
+5. Написати `reflection.md` та оновити `ai_usage.txt`.
+
+Як рухаємося — спочатку подивимося на Task 1 (структура `tests/io` і тест-раннер), чи одразу сплануємо додаткове завдання з `extern fn`?
+
+---
+
+User:
+а які вимоги до аі юзу в цій практиці?
+
+Model:
+У цій практиці вимоги до використання AI мають кілька **критично важливих правил та одне суворе обмеження**:
+
+---
+
+### 1. 🚫 Головна заборона: `reflection.md` пишеться БЕЗ AI
+У тексті практики прямо зазначено:
+> **"The reflection is your own text, written without an AI tool."**
+
+* **Task 2 (Рефлексію на 1.5 бала)** ви повинні написати **самостійно, своїми словами**.
+* Викладач перевіряє її особисто (людина, а не автогрейдер) і оцінює конкретику (ваші реальні враження, посилання на конкретні файли, тести чи рядки вашого компілятора).
+* Використовувати AI для генерації тексту рефлексії **заборонено**.
+
+---
+
+### 2. 📝 Обов'язкове оновлення `ai_usage.txt`
+> **"`ai_usage.txt` is updated for this practice (tools, prompts, what you took as-is, what you changed, or “not used”); a missing or stub file is 0 for the practice."**
+
+* Відсутність файлу, порожній файл або шаблон/заглушка (stub) означає **0 балів за всю практику**.
+* У файлі мають бути зафіксовані:
+  - Інструменти (наприклад, *Google Antigravity CLI, Gemini 3.8 Flash*);
+  - Промпти та запити;
+  - Що саме було згенеровано/взято as-is;
+  - Що ви змінили або допрацювали власноруч (і чому).
+  *(Якщо взагалі не використовували для коду — потрібно чітко написати `not used`)*.
+
+---
+
+### 3. ⚙️ Де AI дозволено і які обмеження на код:
+Для **Task 1** (написання програми `points.txt`, доопрацювання тест-раннера `run_tests.py`, перевірка кодогенерації) та **Additional Task** (`extern fn`):
+* Допомога AI дозволена (за умови фіксації в `ai_usage.txt`).
+* **Але є технічні обмеження компілятора:**
+  - Бінарник має збиратися саме з `.ll`, який генерує ваш компілятор (жодних правок `.ll` файлів руками чи переписування програми на C — за це 0 балів).
+  - Генерація IR виключно через `llvmlite.ir` (жодного склеювання IR через рядки).
+
+---
+
+User:
+окі напиши мені теплейт (тільки темплейт) зверху у файлі логу, за прикладом попередніх практик чи стейджів
+
+Model:
+Додав темплейт на самий початок [ai_usage.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/ai_usage.txt) за стандартом попередніх практик:
+
+* **Розділ 1: Tools Used** (назва інструменту, модель, скоуп використання).
+* **Розділ 2: What Was Taken, Changed, and Why** (що згенеровано, що змінено/перевірено вручну).
+* **Розділ 3: What I Understood (In My Own Words)** (підсумок власними словами щодо бінарної збірки, лінкування чи FFI).
+* **Розділ 4: Full Prompts and Chat Transcripts** (поточні та подальші логи спілкування).
+
+---
+
+User:
+окей, беремось за перший таск. розкажи трішки  детальніше про нього, бо я поки не зроз до кінця як і що потрібно зробити
+
+Model:
+**Task 1 («The Program & I/O Sessions»)** — це фінальна перевірка того, що ваш компілятор створює не просто абстрактні абстрактні тексти в пам'яті під `lli`, а **справжній автономний бінарник (ELF)**, який можна запустити в Linux, вводити дані через клавіатуру або файл і отримувати результат.
+
+Давайте розберемо детально: з чого складається таск, що потрібно написати і як це працює.
+
+---
+
+### 1. Що робить сама програма `points`?
+
+У файлі `tests/io/points.txt` пишеться програма мовою нашого курсу:
+
+```text
+struct Point
+{
+    i32 x
+    i32 y
+    fn d2 := () -> i32
+    {
+        i32 r{x * x + y * y}
+        exit r
+    }
+}
+fn report := (Point p, i32 d) -> i32
+{
+    i32 mut hit{0}
+    if p.d2() == d
+    {
+        print(p)
+        hit := 1
+    }
+    exit hit
+}
+print("Enter point 1 (x y):")
+Point p1{read(), read()}
+print("Enter point 2 (x y):")
+Point p2{read(), read()}
+print("Enter point 3 (x y):")
+Point p3{read(), read()}
+print("Enter distance squared:")
+i32 d{read()}
+i32 n{report(p1, d) + report(p2, d) + report(p3, d)}
+exit n
 ```
 
-Всі зміни Додаткового таску зараз знаходяться в робочому дереві. Якщо все виглядає добре, скажіть — і я зроблю фінальний коміт для додаткового таску.
+**Як вона працює:**
+1. Оголошено структуру `Point` з полями `x, y` та методом `d2()`, який повертає квадрат відстані до $(0, 0)$ ($x^2 + y^2$).
+2. Оголошено функцію `report(p, d)`: якщо `p.d2() == d`, вона друкує точку `print(p)` і повертає `1`, інакше повертає `0`.
+3. Основна програма виводить підказки (`print("Enter point 1 (x y):")`) і через `read()` зчитує координати трьох точок ($x$ і $y$ для кожної).
+4. Далі зчитує пороговий квадрат відстані `d`.
+5. Підсумовує результати викликів `report` і завершується через `exit n` (де $n$ — кількість точок, квадрат відстані яких дорівнює `d`).
+
+---
+
+### 2. Як програма збирається в нативний бінарник?
+
+Замість запуску через інтерпретатор LLVM JIT (`lli`), ми проходимо повний пайплайн компіляції:
+```bash
+# 1. Компілятор генерує LLVM IR (.ll)
+python3 compiler.py tests/io/points.txt points.ll
+
+# 2. llc компілює LLVM IR у машинний об'єктний файл (.o)
+llc -filetype=obj -relocation-model=pic points.ll -o points.o
+
+# 3. clang лінкує об'єктний файл з libc у виконуваний файл points
+clang -fPIE points.o -o points
+```
+
+**Чому потрібні флаги `-relocation-model=pic` та `-fPIE`?**
+* Сучасний Linux вимагає Position Independent Executable (PIE) для безпеки (ASLR).
+* Якщо не передати `-relocation-model=pic` в `llc`, то `clang` видасть помилку лінкування: `relocation against symbol ... can not be used when making a PIE object; recompile with -fPIE`.
+
+**Що всередині `points.o`?**
+Якщо виконати `nm points.o`, ми побачимо:
+* `T Point_d2` — наш скомпільований метод;
+* `T user_report` — наша функція;
+* `T main` — точка входу;
+* `U printf` та `U scanf` — невизначені символи, які лінкер `clang` автоматично підтягує зі стандартної бібліотеки C (`libc.so.6`).
+
+---
+
+### 3. Що таке I/O сесії (`tests/io/`) і чому вони розділені на `.in` та `.expected`?
+
+Коли ви запускаєте програму вручну в терміналі:
+```text
+$ ./points
+Enter point 1 (x y):
+3 4
+Enter point 2 (x y):
+1 1
+Enter point 3 (x y):
+0 5
+Enter distance squared:
+25
+Point{x: 3, y: 4}
+Point{x: 0, y: 5}
+Program exit with result 2
+```
+Ви бачите і те, що друкує програма, і те, що вводите ви.
+
+**Але в автоматичних тестах введення перенаправляється з файлу:**
+```bash
+./points < tests/io/points.sheet.in
+```
+У цьому випадку термінал **не відлунює (echo)** введений текст у вивід. Тому програма в `stdout` віддає **тільки свої власні повідомлення**!
+
+Тому сесія розбивається на два файли:
+* `points.sheet.in` (те, що надходить на `stdin`):
+  ```text
+  3 4
+  1 1
+  0 5
+  25
+  ```
+* `points.sheet.expected` (те, що програма видає у `stdout`):
+  ```text
+  Enter point 1 (x y):
+  Enter point 2 (x y):
+  Enter point 3 (x y):
+  Enter distance squared:
+  Point{x: 3, y: 4}
+  Point{x: 0, y: 5}
+  Program exit with result 2
+  ```
+
+Вимога практики — підготувати **3 таких сесії**:
+1. `points.sheet` — стандартний приклад (вище);
+2. `points.none` — жодна точка не підходить (наприклад, ті самі точки, але відстань 7 $\rightarrow$ виводить `Program exit with result 0`);
+3. `points.all` — від'ємні координати (`-3 4`, `4 -3`, `5 0`, відстань 25 $\rightarrow$ виводить усі 3 точки і `Program exit with result 3`).
+
+---
+
+### 4. Що потрібно зробити в коді для Task 1?
+
+1. **Створити папку `tests/io/`** і покласти туди:
+   * `points.txt`
+   * `points.sheet.in` та `points.sheet.expected`
+   * `points.none.in` та `points.none.expected`
+   * `points.all.in` та `points.all.expected`
+2. **Оновити наш тестовий раннер `tests/run_tests.py`**:
+   * Зараз він ганяє `tests/ok`, `tests/err` та `tests/opt`.
+   * Потрібно навчити його також проходити `tests/io/`: для кожної програми `NAME.txt` збирати бінарник через `llc` + `clang`, запускати для кожної сесії `NAME.S.in`, порівнювати вивід з `NAME.S.expected` і перевіряти, що код виходу 0.
+   * Перевірити, що всі тести проходять і без `--remove-unused`, і з `--remove-unused`.
+3. **Переконатися, що `print(p)` не містить захардкоджених перевірок на `Point`**:
+   * Ми щойно перевірили [compiler.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/compiler.py) — наш `emit_print_struct` уже повністю універсальний і ітерується по полях будь-якої структури через `gep` + `load` + `printf`!
+
+Хочете, зараз створимо тестові файли для `points` і запустимо збірку бінарника вручну, щоб побачити його в дії?
+
+---
+
+User:
+а, ну тобто ми просто створюємо програму і пишемо на неї тести, як і раніше. окрім цього треба ранер оновити, так? якщо так то я наскефолдив там вже трошки, потрібно дописати тести та власне оновити сам ранер
+
+Model:
+Саме так! Ми написали саму програму, підготували всі тестові сесії та оновили тестовий раннер.
+
+Ось що зроблено та перевірено:
+
+---
+
+### 1. Створено та заповнено всі сесії в `tests/io/`:
+* [points.txt](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.txt) — програма з умов практики (`Point` з методом `d2()`, `report(p, d)`, зчитування 3 точок і порогу через `read()`).
+* [points.sheet.in](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.sheet.in) та [points.sheet.expected](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.sheet.expected):
+  - Ввід: координати `3 4`, `1 1`, `0 5`, поріг `25`.
+  - Очікуваний вивід: 2 точки (`Point{x: 3, y: 4}`, `Point{x: 0, y: 5}`) та `Program exit with result 2`.
+* [points.none.in](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.none.in) та [points.none.expected](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.none.expected):
+  - Поріг `7` (жодна точка не підходить) $\rightarrow$ `Program exit with result 0`.
+* [points.all.in](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.all.in) та [points.all.expected](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/io/points.all.expected):
+  - Від'ємні координати `-3 4`, `4 -3`, `5 0`, поріг `25` (підходять усі три) $\rightarrow$ друк усіх 3 точок та `Program exit with result 3`.
+
+---
+
+### 2. Оновлено тестовий раннер [tests/run_tests.py](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/tests/run_tests.py):
+* Автоматично підхоплює програми з `tests/io/` (а також підготовлений до `tests/ffi/` для додаткового завдання).
+* Збирає кожну програму через нативний пайплайн: `compiler.py` $\rightarrow$ `llc -filetype=obj -relocation-model=pic` $\rightarrow$ `clang -fPIE`.
+* Запускає отриманий бінарник для кожної сесії `NAME.*.in`, передає дані на `stdin` та порівнює вивід з `NAME.*.expected`.
+
+---
+
+### 3. Створено допоміжний скрипт збірки [full_compiler.sh](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/full_compiler.sh):
+Згідно з описом практики (стор. 2), цей скрипт дозволяє в один рядок зібрати бінарник вручну:
+```bash
+./full_compiler.sh tests/io/points.txt points
+./points < tests/io/points.sheet.in
+```
+
+---
+
+### 4. Результати тестування:
+* **Без прапорця**:
+  ```text
+  ✅ PASS: io/points.all (output matches expected)
+  ✅ PASS: io/points.none (output matches expected)
+  ✅ PASS: io/points.sheet (output matches expected)
+  Result: 151 passed, 0 failed.
+  ```
+* **З `--remove-unused`**:
+  ```text
+  Running 151 tests (with --remove-unused)...
+  Result: 151 passed, 0 failed.
+  ```
+
+Всі файли знаходяться в робочому дереві гілки `practice-10`. 
+
+**Task 1 повністю готовий і протестований.** Як рухаємося далі — беремося за **Additional Task** (`extern fn` на +1 бал) чи перейдемо до написання **`reflection.md`**?
+
+---
+
+User:
+дай но я його ще потестую, накидай мені команд шоб я не писав руками
+
+Model:
+Ось готові команди для копіювання в термінал:
+
+---
+
+### 1. Перевірка всіх тестів через раннер (як вимагає автогрейдер)
+
+```bash
+# Звичайний прогін (усі 151 тест, включно з трьома сесіями io/points):
+python3 tests/run_tests.py
+
+# Прогін з прапорцем оптимізації --remove-unused:
+python3 tests/run_tests.py --remove-unused
+```
+
+---
+
+### 2. Повна ручна збірка бінарника (те, що просять показати викладачу)
+
+```bash
+# Крок 1: компіляція в LLVM IR
+python3 compiler.py tests/io/points.txt points.ll
+
+# Крок 2: генерація PIC об'єктного файлу
+llc -filetype=obj -relocation-model=pic points.ll -o points.o
+
+# Крок 3: лінкування через clang з libc
+clang -fPIE points.o -o points
+
+# Крок 4: перевірка символів (має показати U printf, U scanf, T Point_d2, T main)
+nm points.o
+```
+
+---
+
+### 3. Прогін трьох тестових сесій через файл (`<`)
+
+```bash
+# Сесія 1: points.sheet (має знайти 2 точки, код виходу 2)
+./points < tests/io/points.sheet.in
+
+# Сесія 2: points.none (відстань 7, жодна не підходить, код виходу 0)
+./points < tests/io/points.none.in
+
+# Сесія 3: points.all (від'ємні координати, підходять усі 3 точки, код виходу 3)
+./points < tests/io/points.all.in
+```
+
+---
+
+### 4. Тестування в один клік через скрипт `full_compiler.sh`
+
+```bash
+./full_compiler.sh tests/io/points.txt points && ./points < tests/io/points.sheet.in
+```
+
+---
+
+### 5. Ручний інтерактивний ввід з клавіатури
+
+Запустіть:
+```bash
+./points
+```
+І введіть по черзі (як промптить):
+```text
+3 4
+1 1
+0 5
+25
+```
+
+---
+
+User:
+отут бага без аутпута. 
+
+також, для чого ти створив файл @[/home/ubuntu/cs400/cs400-course-repo-vkatsel/full_compiler.sh] &
+
+Model:
+### 1. Щодо «баги без аутпута» на скріншоті:
+
+Тут насправді **все спрацювало математично точно**, помилки немає:
+
+Подивіться на координати, які ви ввели:
+* **Точка 1**: `1 2` $\rightarrow x^2 + y^2 = 1^2 + 2^2 = 1 + 4 =$ **`5`**
+* **Точка 2**: `3 4` $\rightarrow x^2 + y^2 = 3^2 + 4^2 = 9 + 16 =$ **`25`**
+* **Точка 3**: `-1 -2` $\rightarrow x^2 + y^2 = (-1)^2 + (-2)^2 = 1 + 4 =$ **`5`**
+
+Далі ви ввели `Enter distance squared:` **`10`**.
+
+Жодна з ваших точок не має суми квадратів $10$ ($5 \ne 10$, $25 \ne 10$, $5 \ne 10$). Тому:
+* жодна точка не потрапила під умову `p.d2() == d`;
+* нічого не надрукувалося;
+* функція `report` тричі повернула `0`;
+* результат виходу: **`Program exit with result 0`**.
+
+> 💡 **Як отримати 10:**  
+> Щоб квадрат відстані був $10$, координати мають бути, наприклад, `1 3` або `3 1` ($1^2 + 3^2 = 1 + 9 = 10$), або `-1 3`.  
+> Спробуйте ввести, наприклад:
+> ```text
+> 1 3
+> 3 1
+> 2 2
+> 10
+> ```
+> І воно виведе дві точки `Point{x: 1, y: 3}` та `Point{x: 3, y: 1}`, а в кінці: `Program exit with result 2`.
+
+---
+
+### 2. Для чого створено `full_compiler.sh`?
+
+Цей файл згаданий прямо в інструкції до практики ([CS400_Practice_10.md](file:///home/ubuntu/cs400/.agents/w10-files/CS400_Practice_10.md), рядок 90):
+> ```bash
+> python3 compiler.py tests/io/points.txt points.ll
+> llc -filetype=obj -relocation-model=pic points.ll -o points.o
+> clang -fPIE points.o -o points
+> ./points < tests/io/points.sheet.in
+> ./points
+> ```
+> *"The same lines can live in a script, `full_compiler.sh`."*
+
+Викладач запропонував зберегти ці три команди в `full_compiler.sh`, щоб не вводити пайплайн `compiler.py -> llc -> clang` щоразу руками під час демонстрації.
+
+Але якщо ви вважаєте його зайвим у репозиторії — скажіть, я його одразу видалю!
+
+---
+
+User:
+хм, а зіба ми не маємо повідомляти якраз у таких пиадках шо нема відповідно чого виводити
+
+Model:
+Ні, якраз **нічого додаткового виводити не треба**. Повідомленням про те, що нічого не знайдено, є саме фінальний рядок:
+```text
+Program exit with result 0
+```
+
+Це прямо зафіксовано в умові практики ([CS400_Practice_10.md](file:///home/ubuntu/cs400/.agents/w10-files/CS400_Practice_10.md), рядок 123):
+> *"`points.none` , where nothing matches (the same points with 7: **only the prompts and `Program exit with result 0`** )"*
+
+І в коді програми `points.txt` (який дано в завданні) немає жодної гілки `else` чи окремого повідомлення:
+```text
+fn report := (Point p, i32 d) -> i32
+{
+    i32 mut hit{0}
+    if p.d2() == d
+    {
+        print(p)
+        hit := 1
+    }
+    exit hit
+}
+...
+i32 n{report(p1, d) + report(p2, d) + report(p3, d)}
+exit n
+```
+
+Коли $n = 0$, інструкція `exit n` завершує програму і друкує `Program exit with result 0`. Якщо додати туди якийсь додатковий `print`, автогрейдер завалить сесію `points.none`.
+
+---
+
+User:
+ну ок, тоді закоміть будь ласка
+
+Model:
+Закомітив!
+
+* **Хеш коміту:** `c8c39bd`
+* **Повідомлення:** `feat(practice-10): implement Task 1 (points binary, I/O test runner, and sessions)`
+* **Включено у коміт:**
+  - `tests/io/points.txt` та всі 3 сесії (`sheet`, `none`, `all`);
+  - оновлений `tests/run_tests.py` з підтримкою збірки та прогону I/O сесій;
+  - `full_compiler.sh` (допоміжний скрипт збірки бінарника);
+  - `.gitignore` (додано виконувані бінарники);
+  - оновлений `ai_usage.txt` (також здубльовано у `.agents/w10-files/ai_usage.txt`).
+
+Робоче дерево чисте (`nothing to commit, working tree clean`).
+
+---
+
+User:
+окі. тепер таск 2 лишився тільки правильно? там релексія, створи мені файл та накидай будь ласк атемплейт всередині нього
+
+Model:
+Створив файл [reflection.md](file:///home/ubuntu/cs400/cs400-course-repo-vkatsel/reflection.md) у корені репозиторію з темплейтом під усі 5 пунктів.
+
+### Короткі підказки перед заповненням:
+1. **Обсяг**: суворо **300–600 слів** (все, що більше 600 слів, викладач не читає).
+2. **Пишеться самостійно без AI** (пряма вимога завдання).
+3. **Оцінювання**: кожен пункт дає по **0.3 бала** (разом 1.5 бала).
+4. **Конкретика**: обов'язково посилайтеся на реальні речі з репозиторію, які викладач може перевірити. Наприклад:
+   - Файли компілятора: `compiler.py`, `optimizer.py`, `lexer.py`.
+   - Методи AST / візиторів: `visit_member_call`, `_check_target_mut`, `emit_print_struct`, `UseCounter`, `Pruner`.
+   - Конкретні тести: `lambda_mut_counter_example.txt`, `points.txt`, `opt/call_kept.txt`.
+   - Специфічні механізми: аналіз ефектів (чисті функції), розцукрювання лямбд у структури із захопленням полів, фіксовані точки у видаленні мертвого коду, узгодження ABI типів тощо.
+
+---
+
+> ℹ️ **Щодо завдань:**  
+> Так, для обов'язкових 3 балів лишився тільки цей Task 2 (`reflection.md`).  
+> Додатково є ще **Additional Task на +1 бал** (`extern fn` для FFI з C) — якщо вирішите його робити після рефлексії, дайте знати!
 
 ---
